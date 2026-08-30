@@ -176,6 +176,24 @@ export interface GoogleAppsScriptConfig {
   autoSync: boolean;
 }
 
+export type UserRole = 'admin' | 'user';
+
+export interface AppUser {
+  id: string;
+  nome: string;
+  email: string;
+  role: UserRole;
+  deve_trocar_senha: boolean;
+  ativo: boolean;
+  criado_em?: string;
+  ultimo_login?: string;
+}
+
+export interface AuthSession {
+  token: string;
+  user: AppUser;
+}
+
 export interface DrillDownTarget {
   type: 'question_option' | 'crosstab_cell' | 'satisfaction_group';
   surveyTitle: string;
