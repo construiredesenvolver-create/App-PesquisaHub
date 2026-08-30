@@ -50,6 +50,20 @@ var SESSION_DURATION_HOURS = 24;
 /**
  * Inicializa a estrutura de abas e cabeçalhos na planilha se não existirem.
  */
+/**
+ * FUNÇÃO DE AUTORIZAÇÃO — execute-a UMA VEZ manualmente pelo editor do Apps Script
+ * (selecione "autorizarPermissoes" no menu de funções e clique em "Executar").
+ * Isso força o Google a pedir sua aprovação para usar o Google Drive (fotos/logo)
+ * e o Gmail (e-mails de novo usuário/redefinição de senha). Sem rodar isso uma vez
+ * manualmente, o app da web sozinho não consegue pedir essa permissão, e as fotos
+ * e os e-mails falham com "Exception: Você não tem permissão para chamar...".
+ */
+function autorizarPermissoes() {
+  DriveApp.getRootFolder();
+  MailApp.getRemainingDailyQuota();
+  Logger.log('Permissões concedidas com sucesso!');
+}
+
 function initDatabase() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   
