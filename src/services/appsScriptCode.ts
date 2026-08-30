@@ -776,7 +776,9 @@ function uploadPhotoToDrive(base64Data, mimeType, surveyId) {
 
   var fileId = file.getId();
   // URL direta, funciona bem dentro de tags <img>
-  var directUrl = 'https://drive.google.com/uc?export=view&id=' + fileId;
+  // O formato antigo "uc?export=view" foi descontinuado pelo Google para uso em tags <img>
+  // (passa a retornar erro 403). O formato de miniatura abaixo é o atual e oficial.
+  var directUrl = 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w1000';
 
   logOperation('UPLOAD_PHOTO', 'Foto enviada para a pesquisa ' + surveyId + ': ' + fileName, 'SUCCESS');
   return { url: directUrl, fileId: fileId };
