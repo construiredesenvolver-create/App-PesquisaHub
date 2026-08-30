@@ -1,5 +1,5 @@
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import html2canvas from 'html2canvas-pro';
 
 // Dimensões de página A4 e margens usadas no relatório em PDF
 const PAGE_WIDTH_MM = 210;
