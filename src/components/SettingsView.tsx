@@ -21,21 +21,73 @@ import {
 } from 'lucide-react';
 import { GOOGLE_APPS_SCRIPT_CODE } from '../services/appsScriptCode';
 import { ApiService, APP_CONFIG } from '../services/api';
-import { GoogleAppsScriptConfig } from '../types';
+import { compressImageToBase64 } from '../services/imageUtils';
+import { GoogleAppsScriptConfig, AppSettings } from '../types';
 
 interface SettingsViewProps {
   config: GoogleAppsScriptConfig;
   onSaveConfig: (config: Partial<GoogleAppsScriptConfig>) => void;
   onRefreshDataFromSheets: () => Promise<void>;
+  appSettings?: AppSettings;
+  isAdmin?: boolean;
+  onSaveAppSettings?: (logoUrl: string, nomeExibicao: string) => Promise<void>;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   config,
   onSaveConfig,
-  onRefreshDataFromSheets
+  onRefreshDataFromSheets,
+  appSettings,
+  isAdmin,
+  onSaveAppSettings
 }) => {
   const [webAppUrl, setWebAppUrl] = useState(config.webAppUrl || '');
   const [publicAppUrl, setPublicAppUrl] = useState(config.publicAppUrl || '');
+
+  // Identidade Visual (Logo)
+  const [nomeExibicao, setNomeExibicao] = useState(appSettings?.nomeExibicao || '');
+  const [logoPreview, setLogoPreview] = useState(appSettings?.logoUrl || '');
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [savingBrand, setSavingBrand] = useState(false);
+  const [brandError, setBrandError] = useState<string | null>(null);
+  const [brandSaved, setBrandSaved] = useState(false);
+
+  useEffect(() => {
+    if (appSettings) {
+      setNomeExibicao(appSettings.nomeExibicao || '');
+      setLogoPreview(appSettings.logoUrl || '');
+    }
+  }, [appSettings]);
+
+  const handleLogoFileChange = async (file: File) => {
+    setBrandError(null);
+    setUploadingLogo(true);
+    try {
+      const { base64, mimeType } = await compressImageToBase64(file, 400, 0.85);
+      const url = await ApiService.uploadPhotoAnswer('app-logo', base64, mimeType);
+      setLogoPreview(url);
+    } catch (err: any) {
+      setBrandError(err.message || 'Não foi possível enviar a logo.');
+    } finally {
+      setUploadingLogo(false);
+    }
+  };
+
+  const handleSaveBrand = async () => {
+    if (!onSaveAppSettings) return;
+    setBrandError(null);
+    setSavingBrand(true);
+    try {
+      await onSaveAppSettings(logoPreview, nomeExibicao);
+      setBrandSaved(true);
+      setTimeout(() => setBrandSaved(false), 2500);
+    } catch (err: any) {
+      setBrandError(err.message || 'Não foi possível salvar a identidade visual.');
+    } finally {
+      setSavingBrand(false);
+    }
+  };
+
   const [copiedCode, setCopiedCode] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ 
@@ -156,6 +208,82 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           O PesquisaHub armazena todas as pesquisas, perguntas, opções e respostas diretamente na sua planilha Google Sheets através do Google Apps Script.
         </p>
       </div>
+
+      {/* Identidade Visual (Logo) — apenas ADM pode alterar */}
+      {isAdmin && (
+        <div className="bg-white rounded-3xl p-6 md:p-7 border border-slate-200/90 shadow-xs space-y-5">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">Identidade Visual</h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Envie a logo da sua empresa. Ela aparece como um ícone circular no menu, na tela de login e no
+              formulário público — em um espaço de tamanho fixo, para nunca desalinhar o layout.
+            </p>
+          </div>
+
+          {brandError && (
+            <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-medium rounded-xl px-4 py-3">
+              {brandError}
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5">
+            <div className="shrink-0">
+              {logoPreview ? (
+                <img
+                  src={logoPreview}
+                  alt="Prévia da logo"
+                  className="w-20 h-20 rounded-2xl object-cover border border-slate-200 shadow-xs"
+                />
+              ) : (
+                <div className="w-20 h-20 rounded-2xl bg-slate-100 border border-dashed border-slate-300 flex items-center justify-center text-slate-400 text-[10px] font-semibold text-center px-2">
+                  Sem logo
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 space-y-3 w-full">
+              <label className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs cursor-pointer transition-colors">
+                {uploadingLogo ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Cpu className="w-3.5 h-3.5" />
+                )}
+                <span>{uploadingLogo ? 'Enviando...' : logoPreview ? 'Trocar logo' : 'Enviar logo'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  disabled={uploadingLogo}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleLogoFileChange(file);
+                  }}
+                />
+              </label>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Nome de exibição (opcional)</label>
+                <input
+                  type="text"
+                  value={nomeExibicao}
+                  onChange={(e) => setNomeExibicao(e.target.value)}
+                  placeholder="Ex: Nome da sua empresa"
+                  className="w-full max-w-sm px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                />
+              </div>
+
+              <button
+                onClick={handleSaveBrand}
+                disabled={savingBrand || uploadingLogo}
+                className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-2 disabled:opacity-60"
+              >
+                {savingBrand ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : brandSaved ? <Check className="w-3.5 h-3.5" /> : null}
+                <span>{brandSaved ? 'Salvo!' : 'Salvar Identidade Visual'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Painel de Diagnóstico em Tempo Real */}
       <div className="bg-white rounded-3xl p-6 md:p-7 border border-slate-200/90 shadow-xs space-y-6">
