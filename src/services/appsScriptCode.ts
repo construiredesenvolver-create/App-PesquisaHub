@@ -710,6 +710,29 @@ function recordResponse(payload) {
     throw new Error('Esta pesquisa não está aberta para receber respostas (Status atual: ' + targetSurvey.status + '). Publique a pesquisa no painel de administração.');
   }
 
+  // Normalização crítica das respostas: diferentes clientes enviam valores diferentes para a
+  // mesma pergunta de múltipla/única escolha — o formulário autônomo do Apps Script envia o ID
+  // da opção (opt.id), enquanto o app Web pode enviar o texto (opt.valor). Sem essa normalização,
+  // o motor de análise (que agrupa por "texto da opção") não reconhece o valor recebido e cria
+  // uma categoria "fantasma" com o ID bruto, exatamente como visto no gráfico do PesquisaHub.
+  // Aqui resolvemos cada resposta contra a lista real de opções da pergunta (fonte da verdade)
+  // e gravamos sempre o par correto (option_id real + texto legível). Perguntas sem tabela de
+  // opções (texto livre, nota, NPS) continuam sendo gravadas como digitadas, sem option_id.
+  var surveyOptions = targetSurveyData.options || [];
+  answers = answers.map(function(a) {
+    var rawVal = a.valor;
+    var matched = surveyOptions.find(function(o) {
+      return o.question_id === a.question_id &&
+        (o.id === a.option_id || o.id === rawVal || o.valor === rawVal || o.texto === rawVal);
+    });
+    return {
+      id: a.id,
+      question_id: a.question_id,
+      option_id: matched ? matched.id : '',
+      valor: matched ? matched.texto : rawVal
+    };
+  });
+
   var actualSurveyId = targetSurvey.id;
   var respId = respondent.id || ('resp_' + Utilities.getUuid().substring(0, 8));
   var dateStr = respondent.data_resposta || new Date().toISOString().split('T')[0];
