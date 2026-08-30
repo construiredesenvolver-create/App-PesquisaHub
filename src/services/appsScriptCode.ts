@@ -32,8 +32,15 @@ var SHEETS = {
   SETTINGS: 'Settings',
   LOGS: 'Logs',
   USERS: 'Users',
-  SESSIONS: 'Sessions'
+  SESSIONS: 'Sessions',
+  AI_ANALYSIS: 'AIAnalysis'
 };
+
+// Nome da pasta no Google Drive onde as fotos enviadas como resposta são armazenadas
+var PHOTOS_DRIVE_FOLDER_NAME = 'PesquisaHub - Fotos de Respostas';
+
+// Modelo do Gemini usado na análise de sentimento (nível gratuito)
+var GEMINI_MODEL = 'gemini-2.0-flash';
 
 // E-mail do administrador inicial (recebe a conta ADM automaticamente na primeira execução)
 var ADMIN_SEED_EMAIL = 'cristianokuhn7@gmail.com';
@@ -82,6 +89,10 @@ function initDatabase() {
     {
       name: SHEETS.SESSIONS,
       headers: ['token', 'user_id', 'criado_em', 'expira_em']
+    },
+    {
+      name: SHEETS.AI_ANALYSIS,
+      headers: ['id', 'survey_id', 'question_id', 'respostas_count', 'resumo', 'positivo', 'neutro', 'negativo', 'pontos_positivos', 'pontos_negativos', 'atualizado_em']
     }
   ];
 
@@ -548,6 +559,16 @@ function doGet(e) {
         };
         break;
 
+      case 'getSentimentAnalysis':
+        var sentimentSurveyId = e.parameter && e.parameter.survey_id;
+        var sentimentQuestionId = e.parameter && e.parameter.question_id;
+        if (!sentimentSurveyId || !sentimentQuestionId) {
+          throw new Error('Parâmetros survey_id e question_id são obrigatórios.');
+        }
+        var cachedAnalysis = getCachedSentimentAnalysis(sentimentSurveyId, sentimentQuestionId);
+        responseData = { status: 'ok', success: true, data: cachedAnalysis };
+        break;
+
       default:
         // Se a ação não for reconhecida, retorna todos os dados por padrão em vez de erro
         var defaultData = getAllDatabaseData();
@@ -672,6 +693,16 @@ function doPost(e) {
         responseData = { status: 'ok', success: true };
         break;
 
+      case 'uploadPhoto':
+        var uploadResult = uploadPhotoToDrive(postData.base64, postData.mimeType, postData.surveyId);
+        responseData = { status: 'ok', success: true, data: uploadResult };
+        break;
+
+      case 'analisarSentimento':
+        var sentimentResult = analisarSentimentoPergunta(postData.token, postData.surveyId, postData.questionId);
+        responseData = { status: 'ok', success: true, data: sentimentResult };
+        break;
+
       default:
         responseData = { 
           status: 'error', 
@@ -689,6 +720,255 @@ function doPost(e) {
       message: err.toString() 
     });
   }
+}
+
+// ==========================================
+// UPLOAD DE FOTOS (GOOGLE DRIVE)
+// ==========================================
+
+/**
+ * Salva uma foto (recebida em base64) no Google Drive, dentro de uma pasta dedicada,
+ * e devolve uma URL utilizável diretamente em uma tag <img>.
+ */
+function uploadPhotoToDrive(base64Data, mimeType, surveyId) {
+  if (!base64Data) throw new Error('Nenhuma imagem foi enviada.');
+  var safeMimeType = mimeType || 'image/jpeg';
+
+  var folder = getOrCreatePhotosFolder();
+  var bytes = Utilities.base64Decode(base64Data);
+  var fileName = 'resposta_' + (surveyId || 'pesquisa') + '_' + new Date().getTime() + '.jpg';
+  var blob = Utilities.newBlob(bytes, safeMimeType, fileName);
+
+  var file = folder.createFile(blob);
+  // Tornar o arquivo acessível via link (qualquer pessoa com o link pode visualizar)
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  var fileId = file.getId();
+  // URL direta, funciona bem dentro de tags <img>
+  var directUrl = 'https://drive.google.com/uc?export=view&id=' + fileId;
+
+  logOperation('UPLOAD_PHOTO', 'Foto enviada para a pesquisa ' + surveyId + ': ' + fileName, 'SUCCESS');
+  return { url: directUrl, fileId: fileId };
+}
+
+function getOrCreatePhotosFolder() {
+  var folders = DriveApp.getFoldersByName(PHOTOS_DRIVE_FOLDER_NAME);
+  if (folders.hasNext()) {
+    return folders.next();
+  }
+  return DriveApp.createFolder(PHOTOS_DRIVE_FOLDER_NAME);
+}
+
+// ==========================================
+// ANÁLISE DE SENTIMENTO COM IA (GOOGLE GEMINI)
+// ==========================================
+
+/**
+ * Lê a chave da API do Gemini configurada em "Propriedades do Script" (Project Settings).
+ * Nunca fica exposta no código nem no frontend.
+ */
+function getGeminiApiKey() {
+  var key = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  if (!key) {
+    throw new Error('A chave da IA (Gemini) ainda não foi configurada. Peça ao administrador para configurá-la em Configurações do Projeto > Propriedades do Script, com o nome GEMINI_API_KEY.');
+  }
+  return key;
+}
+
+/**
+ * Busca uma análise já em cache na aba AIAnalysis, sem chamar a IA (leitura rápida).
+ */
+function getCachedSentimentAnalysis(surveyId, questionId) {
+  var rows = getRowsAsObjects(getOrCreateSheet(SHEETS.AI_ANALYSIS));
+  var row = rows.find(function(r) { return String(r.survey_id) === String(surveyId) && String(r.question_id) === String(questionId); });
+  if (!row) return null;
+  return formatSentimentRow(row);
+}
+
+function formatSentimentRow(row) {
+  var pontosPositivos = [];
+  var pontosNegativos = [];
+  try { pontosPositivos = JSON.parse(row.pontos_positivos || '[]'); } catch (e) { pontosPositivos = []; }
+  try { pontosNegativos = JSON.parse(row.pontos_negativos || '[]'); } catch (e) { pontosNegativos = []; }
+
+  return {
+    questionId: row.question_id,
+    questionTitle: row.questionTitle || '',
+    resumo: row.resumo || '',
+    positivo: Number(row.positivo) || 0,
+    neutro: Number(row.neutro) || 0,
+    negativo: Number(row.negativo) || 0,
+    pontosPositivos: pontosPositivos,
+    pontosNegativos: pontosNegativos,
+    respostasAnalisadas: Number(row.respostas_count) || 0,
+    atualizadoEm: row.atualizado_em || ''
+  };
+}
+
+/**
+ * Analisa (ou reaproveita do cache) o sentimento das respostas de texto livre de uma pergunta.
+ * Só chama a IA de fato quando o número de respostas mudou desde a última análise —
+ * isso mantém o uso bem dentro da cota gratuita do Gemini.
+ */
+function analisarSentimentoPergunta(token, surveyId, questionId) {
+  var userRaw = getUserFromToken(token);
+  if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
+
+  var surveyData = getFullSurvey(surveyId);
+  if (String(userRaw.role) !== 'admin' && String(surveyData.survey.criado_por) !== String(userRaw.id)) {
+    throw new Error('Acesso negado: esta pesquisa pertence a outro usuário.');
+  }
+
+  var question = surveyData.questions.find(function(q) { return String(q.id) === String(questionId); });
+  if (!question) throw new Error('Pergunta não encontrada nesta pesquisa.');
+
+  var allAnswers = getRowsAsObjects(getOrCreateSheet(SHEETS.ANSWERS))
+    .filter(function(a) { return String(a.question_id) === String(questionId) && a.valor && String(a.valor).trim() !== ''; });
+
+  var textos = allAnswers.map(function(a) { return String(a.valor).trim(); });
+
+  if (textos.length === 0) {
+    throw new Error('Ainda não há respostas de texto para analisar nesta pergunta.');
+  }
+
+  var geminiResult = callGeminiForSentiment(question.titulo, textos);
+
+  var analysisRow = {
+    id: 'ai_' + surveyId + '_' + questionId,
+    survey_id: surveyId,
+    question_id: questionId,
+    respostas_count: textos.length,
+    resumo: geminiResult.resumo,
+    positivo: geminiResult.positivo,
+    neutro: geminiResult.neutro,
+    negativo: geminiResult.negativo,
+    pontos_positivos: JSON.stringify(geminiResult.pontosPositivos || []),
+    pontos_negativos: JSON.stringify(geminiResult.pontosNegativos || []),
+    atualizado_em: new Date().toISOString()
+  };
+
+  saveOrUpdateSentimentRow(analysisRow);
+
+  logOperation('AI_SENTIMENT', 'Sentimento analisado para pergunta ' + questionId + ' (' + textos.length + ' respostas)', 'SUCCESS');
+
+  return {
+    questionId: questionId,
+    questionTitle: question.titulo,
+    resumo: analysisRow.resumo,
+    positivo: analysisRow.positivo,
+    neutro: analysisRow.neutro,
+    negativo: analysisRow.negativo,
+    pontosPositivos: geminiResult.pontosPositivos || [],
+    pontosNegativos: geminiResult.pontosNegativos || [],
+    respostasAnalisadas: textos.length,
+    atualizadoEm: analysisRow.atualizado_em
+  };
+}
+
+function saveOrUpdateSentimentRow(row) {
+  var sheet = getOrCreateSheet(SHEETS.AI_ANALYSIS);
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var idCol = headers.indexOf('id');
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idCol]) === String(row.id)) {
+      var rowValues = headers.map(function(h) { return row[h] !== undefined ? row[h] : data[i][headers.indexOf(h)]; });
+      sheet.getRange(i + 1, 1, 1, headers.length).setValues([rowValues]);
+      return;
+    }
+  }
+
+  var newRowValues = headers.map(function(h) { return row[h] !== undefined ? row[h] : ''; });
+  sheet.appendRow(newRowValues);
+}
+
+/**
+ * Chama a API do Google Gemini para resumir o sentimento de uma lista de respostas de texto.
+ * Faz UMA única chamada por pergunta (nunca uma por resposta), para economizar cota gratuita.
+ */
+function callGeminiForSentiment(questionTitle, textos) {
+  var apiKey = getGeminiApiKey();
+
+  // Limitar a quantidade de texto enviada à IA (mantém o pedido leve e dentro da cota gratuita)
+  var MAX_RESPOSTAS = 300;
+  var amostra = textos.slice(0, MAX_RESPOSTAS);
+  var listaRespostas = amostra.map(function(t, i) { return (i + 1) + '. ' + t; }).join('\n');
+
+  var prompt = 'Você é um analista de pesquisas de clima organizacional. ' +
+    'Pergunta feita aos respondentes: "' + questionTitle + '".\n\n' +
+    'Respostas recebidas (uma por linha):\n' + listaRespostas + '\n\n' +
+    'Analise o SENTIMENTO de todas as respostas acima e responda SOMENTE com um JSON válido, ' +
+    'sem nenhum texto antes ou depois, no seguinte formato exato:\n' +
+    '{"resumo": "um parágrafo curto em português resumindo o clima geral das respostas", ' +
+    '"positivo": numero_inteiro_percentual_0_a_100, ' +
+    '"neutro": numero_inteiro_percentual_0_a_100, ' +
+    '"negativo": numero_inteiro_percentual_0_a_100, ' +
+    '"pontosPositivos": ["até 5 frases curtas com os principais elogios/pontos fortes citados"], ' +
+    '"pontosNegativos": ["até 5 frases curtas com as principais críticas/pontos de atenção citados"]}\n' +
+    'Os três percentuais (positivo, neutro, negativo) devem somar exatamente 100.';
+
+  var payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.2,
+      responseMimeType: 'application/json'
+    }
+  };
+
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + apiKey;
+
+  var response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+
+  var statusCode = response.getResponseCode();
+  var responseText = response.getContentText();
+
+  if (statusCode !== 200) {
+    logOperation('AI_ERROR', 'Gemini retornou ' + statusCode + ': ' + responseText, 'ERROR');
+    throw new Error('A IA não conseguiu processar a análise agora (código ' + statusCode + '). Tente novamente em alguns instantes — pode ser um limite temporário da cota gratuita.');
+  }
+
+  var parsedResponse;
+  try {
+    parsedResponse = JSON.parse(responseText);
+  } catch (e) {
+    throw new Error('A IA retornou uma resposta inesperada. Tente novamente.');
+  }
+
+  var textContent = parsedResponse.candidates && parsedResponse.candidates[0] &&
+    parsedResponse.candidates[0].content && parsedResponse.candidates[0].content.parts &&
+    parsedResponse.candidates[0].content.parts[0] && parsedResponse.candidates[0].content.parts[0].text;
+
+  if (!textContent) {
+    throw new Error('A IA não retornou nenhum resultado. Tente novamente.');
+  }
+
+  var resultJson;
+  try {
+    resultJson = JSON.parse(textContent);
+  } catch (e) {
+    // Tentativa de recuperação: extrair apenas o trecho entre chaves, caso venha texto extra
+    var match = textContent.match(/\{[\s\S]*\}/);
+    if (match) {
+      resultJson = JSON.parse(match[0]);
+    } else {
+      throw new Error('Não foi possível interpretar o resultado da IA. Tente novamente.');
+    }
+  }
+
+  return {
+    resumo: resultJson.resumo || '',
+    positivo: Number(resultJson.positivo) || 0,
+    neutro: Number(resultJson.neutro) || 0,
+    negativo: Number(resultJson.negativo) || 0,
+    pontosPositivos: Array.isArray(resultJson.pontosPositivos) ? resultJson.pontosPositivos : [],
+    pontosNegativos: Array.isArray(resultJson.pontosNegativos) ? resultJson.pontosNegativos : []
+  };
 }
 
 // ==========================================
@@ -1417,6 +1697,13 @@ function renderStandaloneSurveyHtml(surveyId, e) {
 '          body += "</div><div class=\'flex justify-between text-[10px] text-slate-400 font-semibold px-1\'><span>0 - Nada provável</span><span>10 - Extremamente provável</span></div></div>";' +
 '        } else if (qType === "long_text" || qType === "paragrafo" || qType === "texto_longo") {' +
 '          body = "<textarea name=\'q_" + q.id + "\' rows=\'4\' " + reqAttr + " placeholder=\'Sua resposta detalhada...\' class=\'w-full bg-slate-50 border border-slate-200 rounded-2xl p-3.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all\'></textarea>";' +
+'        } else if (qType === "foto") {' +
+'          body = "<input type=\'hidden\' name=\'q_" + q.id + "\' id=\'hidden_q_" + q.id + "\' value=\'\'>" +' +
+'            "<div id=\'preview_q_" + q.id + "\' class=\'mb-2\'></div>" +' +
+'            "<label class=\'flex flex-col items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-2xl p-6 cursor-pointer hover:border-blue-400 hover:bg-blue-50/40 transition-colors\'>" +' +
+'              "<span class=\'photo-label-text text-xs font-semibold text-slate-500\'>\uD83D\uDCF7 Toque para tirar ou enviar uma foto</span>" +' +
+'              "<input type=\'file\' accept=\'image/*\' capture=\'environment\' class=\'pesquisahub-photo-file hidden\' data-qid=\'" + q.id + "\'>" +' +
+'            "</label>";' +
 '        } else {' +
 '          body = "<input type=\'text\' name=\'q_" + q.id + "\' " + reqAttr + " placeholder=\'Sua resposta...\' class=\'w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all\'>";' +
 '        }' +
@@ -1427,8 +1714,85 @@ function renderStandaloneSurveyHtml(surveyId, e) {
 '    }' +
 '    renderQuestions();' +
 '    ' +
+'    function compressImageToBase64(file) {' +
+'      return new Promise(function(resolve, reject) {' +
+'        var reader = new FileReader();' +
+'        reader.onerror = function() { reject(new Error("Não foi possível ler o arquivo.")); };' +
+'        reader.onload = function() {' +
+'          var img = new Image();' +
+'          img.onerror = function() { reject(new Error("Não foi possível processar a imagem.")); };' +
+'          img.onload = function() {' +
+'            var maxDim = 1280;' +
+'            var width = img.width, height = img.height;' +
+'            if (width > maxDim || height > maxDim) {' +
+'              if (width >= height) { height = Math.round((height / width) * maxDim); width = maxDim; }' +
+'              else { width = Math.round((width / height) * maxDim); height = maxDim; }' +
+'            }' +
+'            var canvas = document.createElement("canvas");' +
+'            canvas.width = width; canvas.height = height;' +
+'            var ctx = canvas.getContext("2d");' +
+'            ctx.drawImage(img, 0, 0, width, height);' +
+'            var dataUrl = canvas.toDataURL("image/jpeg", 0.72);' +
+'            resolve(dataUrl.split(",")[1] || "");' +
+'          };' +
+'          img.src = reader.result;' +
+'        };' +
+'        reader.readAsDataURL(file);' +
+'      });' +
+'    }' +
+'    ' +
+'    function wirePhotoInputs() {' +
+'      var fileInputs = document.querySelectorAll(".pesquisahub-photo-file");' +
+'      fileInputs.forEach(function(input) {' +
+'        input.addEventListener("change", function() {' +
+'          var qid = input.getAttribute("data-qid");' +
+'          var file = input.files && input.files[0];' +
+'          if (!file) return;' +
+'          var previewEl = document.getElementById("preview_q_" + qid);' +
+'          var hiddenEl = document.getElementById("hidden_q_" + qid);' +
+'          var labelText = input.parentElement.querySelector(".photo-label-text");' +
+'          if (labelText) labelText.textContent = "Enviando foto...";' +
+'          input.disabled = true;' +
+'          compressImageToBase64(file).then(function(base64) {' +
+'            return fetch(SCRIPT_URL, {' +
+'              method: "POST",' +
+'              headers: { "Content-Type": "text/plain;charset=utf-8" },' +
+'              body: JSON.stringify({ action: "uploadPhoto", surveyId: surveyData.survey.id, mimeType: "image/jpeg", base64: base64 })' +
+'            });' +
+'          }).then(function(res) { return res.json(); }).then(function(result) {' +
+'            if ((result.success || result.status === "ok") && result.data && result.data.url) {' +
+'              hiddenEl.value = result.data.url;' +
+'              if (previewEl) previewEl.innerHTML = "<img src=\'" + result.data.url + "\' style=\'max-width:220px;border-radius:16px;border:1px solid #e2e8f0\' />";' +
+'              if (labelText) labelText.textContent = "Foto enviada! Toque para trocar";' +
+'            } else {' +
+'              if (labelText) labelText.textContent = "Falha ao enviar. Toque para tentar novamente";' +
+'              alert("Não foi possível enviar a foto: " + (result.message || "erro desconhecido"));' +
+'            }' +
+'            input.disabled = false;' +
+'          }).catch(function(err) {' +
+'            if (labelText) labelText.textContent = "Falha ao enviar. Toque para tentar novamente";' +
+'            alert("Falha ao enviar a foto: " + err.message);' +
+'            input.disabled = false;' +
+'          });' +
+'        });' +
+'      });' +
+'    }' +
+'    wirePhotoInputs();' +
+'    ' +
 '    function submitForm(e) {' +
 '      e.preventDefault();' +
+'      ' +
+'      for (var vi = 0; vi < surveyData.questions.length; vi++) {' +
+'        var vq = surveyData.questions[vi];' +
+'        if (vq.tipo === "foto" && vq.obrigatoria) {' +
+'          var vHidden = document.getElementById("hidden_q_" + vq.id);' +
+'          if (!vHidden || !vHidden.value) {' +
+'            alert("A pergunta \\"" + vq.titulo + "\\" exige uma foto. Envie a foto antes de continuar.");' +
+'            return;' +
+'          }' +
+'        }' +
+'      }' +
+'      ' +
 '      var btn = document.getElementById("btnSubmit");' +
 '      btn.disabled = true;' +
 '      btn.innerHTML = "<span class=\'animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full\'></span><span>Gravando...</span>";' +
