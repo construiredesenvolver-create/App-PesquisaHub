@@ -6,7 +6,8 @@ import {
   Answer, 
   SurveyStatus,
   GoogleAppsScriptConfig,
-  SentimentAnalysisResult
+  SentimentAnalysisResult,
+  AppSettings
 } from '../types';
 import { DEFAULT_GAS_WEB_APP_URL, GAS_STORAGE_KEY } from './config';
 import { AuthService } from './authService';
@@ -1346,9 +1347,56 @@ export class ApiService {
   }
 
   // ==========================================
-  // EXPORTAÇÃO CSV DE DADOS REAIS
+  // IDENTIDADE VISUAL (LOGO / MARCA)
   // ==========================================
 
+  /**
+   * Busca a logo e o nome de exibição configurados pelo administrador.
+   * Leitura pública — usada tanto no painel quanto no formulário público e no login.
+   */
+  public static async getAppSettings(): Promise<AppSettings> {
+    const fallback: AppSettings = { logoUrl: '', nomeExibicao: '' };
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) return fallback;
+
+    try {
+      const response = await fetch(`${config.webAppUrl}?action=getAppSettings&_t=${Date.now()}`);
+      if (!response.ok) return fallback;
+      const result = await response.json();
+      if ((result.status === 'ok' || result.success) && result.data) {
+        return { logoUrl: result.data.logoUrl || '', nomeExibicao: result.data.nomeExibicao || '' };
+      }
+      return fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  /**
+   * Salva a logo e/ou o nome de exibição. Apenas o ADM pode alterar (validado no backend).
+   */
+  public static async saveAppSettings(logoUrl?: string, nomeExibicao?: string): Promise<void> {
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) throw new Error('Google Apps Script não configurado.');
+    const token = AuthService.getToken();
+    if (!token) throw new Error('Você não está logado.');
+
+    const response = await fetch(config.webAppUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'saveAppSettings', token, logoUrl, nomeExibicao })
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status} ao salvar identidade visual.`);
+    const result = await response.json();
+    if (result.status !== 'ok' && result.success !== true) {
+      throw new Error(result.message || 'Não foi possível salvar a identidade visual.');
+    }
+  }
+
+  // ==========================================
+  // EXPORTAÇÃO CSV DE DADOS REAIS
+  // ==========================================
   public static exportToCSV(surveyId: string): string {
     const survey = this.surveys.find((s) => s.id === surveyId);
     if (!survey) return '';
