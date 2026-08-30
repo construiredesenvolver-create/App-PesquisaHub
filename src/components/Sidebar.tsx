@@ -5,15 +5,16 @@ import {
   PlusCircle, 
   Settings, 
   FileText, 
-  Table, 
-  ExternalLink,
   ChevronRight,
   TrendingUp,
-  Sparkles
+  Users,
+  LogOut,
+  ShieldCheck,
+  User as UserIcon
 } from 'lucide-react';
-import { Survey } from '../types';
+import { Survey, AppUser } from '../types';
 
-export type NavTab = 'dashboard' | 'surveys' | 'builder' | 'analytics' | 'settings';
+export type NavTab = 'dashboard' | 'surveys' | 'builder' | 'analytics' | 'settings' | 'users';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -23,6 +24,8 @@ interface SidebarProps {
   totalResponsesCount: number;
   isMobileOpen: boolean;
   onCloseMobile: () => void;
+  currentUser?: AppUser | null;
+  onLogout?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -32,8 +35,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   totalSurveysCount,
   totalResponsesCount,
   isMobileOpen,
-  onCloseMobile
+  onCloseMobile,
+  currentUser,
+  onLogout
 }) => {
+  const isAdmin = currentUser?.role === 'admin';
+
   return (
     <>
       {/* Overlay Mobile */}
@@ -143,6 +150,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
             )}
 
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  onTabChange('users');
+                  onCloseMobile();
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium transition-colors ${
+                  activeTab === 'users'
+                    ? 'bg-slate-800 text-white font-semibold border-l-2 border-blue-500'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Users className="w-4 h-4 text-purple-400" />
+                  <span>Usuários</span>
+                </div>
+              </button>
+            )}
+
             <div className="pt-4 border-t border-slate-800/60 mt-4">
               <button
                 onClick={() => {
@@ -166,14 +192,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Footer info box */}
-        <div className="p-3 m-3 rounded-xl bg-slate-800/60 border border-slate-700/50 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-slate-300">Banco de Dados</span>
-            <span className="text-[10px] text-emerald-400 font-medium">Sheets V1</span>
+        <div className="p-3 m-3 space-y-3">
+          <div className="rounded-xl bg-slate-800/60 border border-slate-700/50 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-slate-300">Banco de Dados</span>
+              <span className="text-[10px] text-emerald-400 font-medium">Sheets V1</span>
+            </div>
+            <div className="text-[11px] text-slate-400">
+              <strong>{totalResponsesCount}</strong> respostas processadas pelo Motor Analítico.
+            </div>
           </div>
-          <div className="text-[11px] text-slate-400">
-            <strong>{totalResponsesCount}</strong> respostas processadas pelo Motor Analítico.
-          </div>
+
+          {currentUser && (
+            <div className="rounded-xl bg-slate-800/60 border border-slate-700/50 p-3 flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-slate-700 flex items-center justify-center shrink-0">
+                {currentUser.role === 'admin' ? (
+                  <ShieldCheck className="w-4 h-4 text-purple-300" />
+                ) : (
+                  <UserIcon className="w-4 h-4 text-slate-300" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] font-bold text-slate-200 truncate">{currentUser.nome}</div>
+                <div className="text-[10px] text-slate-400 truncate">{currentUser.email}</div>
+              </div>
+              {onLogout && (
+                <button
+                  onClick={onLogout}
+                  title="Sair"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-700/60"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </aside>
     </>
