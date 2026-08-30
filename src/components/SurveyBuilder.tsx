@@ -160,6 +160,19 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
   const handleUpdateQuestion = (index: number, field: keyof QuestionDraft, value: any) => {
     const updated = [...questions];
     updated[index] = { ...updated[index], [field]: value };
+
+    // Ao trocar para um tipo que não usa alternativas (ex: Foto, Texto Livre), limpar opções antigas
+    if (field === 'tipo' && !['single_choice', 'multiple_choice'].includes(value)) {
+      updated[index].options = [];
+    }
+    // Ao trocar PARA um tipo de escolha e não houver nenhuma alternativa ainda, iniciar com 2
+    if (field === 'tipo' && ['single_choice', 'multiple_choice'].includes(value) && updated[index].options.length === 0) {
+      updated[index].options = [
+        { id: generateId('temp_opt'), texto: 'Opção 1', valor: 'Opção 1' },
+        { id: generateId('temp_opt'), texto: 'Opção 2', valor: 'Opção 2' }
+      ];
+    }
+
     setQuestions(updated);
   };
 
@@ -509,6 +522,7 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
                       <option value="multiple_choice">Múltipla Escolha (Checkbox)</option>
                       <option value="text">Texto Livre</option>
                       <option value="rating">Avaliação / Estrelas</option>
+                      <option value="foto">Foto (upload/câmera)</option>
                     </select>
                   </div>
                 </div>
