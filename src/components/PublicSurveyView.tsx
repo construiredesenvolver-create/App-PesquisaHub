@@ -34,6 +34,7 @@ interface PublicSurveyViewProps {
     identificador?: string
   ) => Promise<{ success: boolean; message: string }>;
   onBackToAdmin?: () => void;
+  logoUrl?: string;
 }
 
 export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
@@ -41,7 +42,8 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
   questions,
   options,
   onSubmitResponse,
-  onBackToAdmin
+  onBackToAdmin,
+  logoUrl
 }) => {
   const [nome, setNome] = useState('');
   const [identificador, setIdentificador] = useState('');
@@ -360,11 +362,20 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
 
         {/* Survey Title Card */}
         <div className="bg-white rounded-3xl p-6 md:p-8 border border-slate-200/80 shadow-sm space-y-2">
-          {survey.configuracoes.categoria && (
-            <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-3 py-0.5 rounded-full border border-blue-100 uppercase tracking-wider inline-block">
-              {survey.configuracoes.categoria}
-            </span>
-          )}
+          <div className="flex items-center gap-3 mb-1">
+            {logoUrl && (
+              <img
+                src={logoUrl}
+                alt="Logo"
+                className="w-11 h-11 rounded-full object-cover border border-slate-200 shadow-xs shrink-0"
+              />
+            )}
+            {survey.configuracoes.categoria && (
+              <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-3 py-0.5 rounded-full border border-blue-100 uppercase tracking-wider inline-block">
+                {survey.configuracoes.categoria}
+              </span>
+            )}
+          </div>
           <h1 className="text-xl md:text-3xl font-extrabold text-slate-900 tracking-tight font-display">
             {survey.titulo}
           </h1>
