@@ -7,8 +7,8 @@ import {
   SurveyStatus,
   GoogleAppsScriptConfig 
 } from '../types';
-
-const GAS_STORAGE_KEY = 'pesquisahub_gas_config_v1';
+import { DEFAULT_GAS_WEB_APP_URL, GAS_STORAGE_KEY } from './config';
+import { AuthService } from './authService';
 
 /**
  * Configuração Central do PesquisaHub
@@ -149,7 +149,7 @@ export class ApiService {
     }
 
     return {
-      webAppUrl: '',
+      webAppUrl: DEFAULT_GAS_WEB_APP_URL,
       isConnected: false,
       autoSync: true
     };
@@ -374,9 +374,11 @@ export class ApiService {
       console.log('[API] Buscando pesquisas e dados completos do Google Sheets...');
       
       // Tentativa 1: Endpoint completo action=getAllData (v1.2+)
+      const token = AuthService.getToken();
+      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
       const url = config.webAppUrl.includes('?') 
-        ? `${config.webAppUrl}&action=getAllData&_t=${Date.now()}` 
-        : `${config.webAppUrl}?action=getAllData&_t=${Date.now()}`;
+        ? `${config.webAppUrl}&action=getAllData&_t=${Date.now()}${tokenParam}` 
+        : `${config.webAppUrl}?action=getAllData&_t=${Date.now()}${tokenParam}`;
 
       const response = await fetch(url, {
         method: 'GET',
