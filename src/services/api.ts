@@ -5,7 +5,8 @@ import {
   Respondent, 
   Answer, 
   SurveyStatus,
-  GoogleAppsScriptConfig 
+  GoogleAppsScriptConfig,
+  SentimentAnalysisResult
 } from '../types';
 import { DEFAULT_GAS_WEB_APP_URL, GAS_STORAGE_KEY } from './config';
 import { AuthService } from './authService';
@@ -1238,6 +1239,110 @@ export class ApiService {
       success: true,
       message: 'Resposta registrada com sucesso!'
     };
+  }
+
+  // ==========================================
+  // UPLOAD DE FOTOS (RESPOSTAS DO TIPO "FOTO")
+  // ==========================================
+
+  /**
+   * Envia uma foto (já comprimida e em base64) para o Google Apps Script, que a
+   * salva no Google Drive e devolve uma URL pública para usar como valor da resposta.
+   */
+  public static async uploadPhotoAnswer(
+    surveyId: string,
+    base64: string,
+    mimeType: string
+  ): Promise<string> {
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) {
+      throw new Error('Google Apps Script não configurado.');
+    }
+
+    const response = await fetch(config.webAppUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'uploadPhoto',
+        surveyId,
+        mimeType,
+        base64
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ao enviar a foto.`);
+    }
+
+    const result = await response.json();
+    if (result.status !== 'ok' && result.success !== true) {
+      throw new Error(result.message || 'Não foi possível enviar a foto.');
+    }
+    return result.data.url as string;
+  }
+
+  // ==========================================
+  // ANÁLISE DE SENTIMENTO COM IA (GEMINI)
+  // ==========================================
+
+  /**
+   * Busca uma análise de sentimento já em cache (rápida, não chama a IA).
+   * Use antes de exibir a tela, para não deixar o usuário esperando à toa.
+   */
+  public static async getSentimentAnalysis(
+    surveyId: string,
+    questionId: string
+  ): Promise<SentimentAnalysisResult | null> {
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) return null;
+    const token = AuthService.getToken();
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+
+    const url = `${config.webAppUrl}?action=getSentimentAnalysis&survey_id=${encodeURIComponent(surveyId)}&question_id=${encodeURIComponent(questionId)}${tokenParam}`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const result = await response.json();
+    if ((result.status === 'ok' || result.success) && result.data) {
+      return result.data as SentimentAnalysisResult;
+    }
+    return null;
+  }
+
+  /**
+   * Dispara (ou atualiza) a análise de sentimento via IA para uma pergunta de texto livre.
+   * Só reprocessa de fato quando há respostas novas desde a última análise (economiza cota gratuita).
+   */
+  public static async analyzeSentiment(
+    surveyId: string,
+    questionId: string
+  ): Promise<SentimentAnalysisResult> {
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) {
+      throw new Error('Google Apps Script não configurado.');
+    }
+    const token = AuthService.getToken();
+    if (!token) throw new Error('Você não está logado.');
+
+    const response = await fetch(config.webAppUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        action: 'analisarSentimento',
+        token,
+        surveyId,
+        questionId
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ao analisar sentimento.`);
+    }
+
+    const result = await response.json();
+    if (result.status !== 'ok' && result.success !== true) {
+      throw new Error(result.message || 'Não foi possível concluir a análise de sentimento.');
+    }
+    return result.data as SentimentAnalysisResult;
   }
 
   // ==========================================
