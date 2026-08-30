@@ -7,7 +7,8 @@ export type QuestionType =
   | 'rating' 
   | 'short_text' 
   | 'long_text'
-  | 'text';
+  | 'text'
+  | 'foto';
 
 export interface SurveySettings {
   exigir_nome: boolean;
@@ -192,6 +193,19 @@ export interface AppUser {
 export interface AuthSession {
   token: string;
   user: AppUser;
+}
+
+export interface SentimentAnalysisResult {
+  questionId: string;
+  questionTitle: string;
+  resumo: string;
+  positivo: number; // %
+  neutro: number; // %
+  negativo: number; // %
+  pontosPositivos: string[];
+  pontosNegativos: string[];
+  respostasAnalisadas: number;
+  atualizadoEm: string;
 }
 
 export interface DrillDownTarget {
