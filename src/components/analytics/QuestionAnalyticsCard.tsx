@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -32,22 +32,26 @@ import {
   ChevronRight
 } from 'lucide-react';
 
+export type QuestionChartType = 'horizontal_bar' | 'donut' | 'ranking';
+
 interface QuestionAnalyticsCardProps {
   analytics: QuestionAnalytics;
   questionIndex: number;
   surveyTitle: string;
   onDrillDown: (target: DrillDownTarget) => void;
+  chartType: QuestionChartType;
+  onChartTypeChange: (questionId: string, chartType: QuestionChartType) => void;
 }
 
 export const QuestionAnalyticsCard: React.FC<QuestionAnalyticsCardProps> = ({
   analytics,
   questionIndex,
   surveyTitle,
-  onDrillDown
+  onDrillDown,
+  chartType,
+  onChartTypeChange
 }) => {
-  const [chartType, setChartType] = useState<'horizontal_bar' | 'donut' | 'ranking'>(
-    analytics.recommendedChart === 'donut' ? 'donut' : 'horizontal_bar'
-  );
+  const setChartType = (type: QuestionChartType) => onChartTypeChange(analytics.questionId, type);
 
   const {
     questionId,
