@@ -8,7 +8,10 @@ import { AnalyticsView } from './components/analytics/AnalyticsView';
 import { SettingsView } from './components/SettingsView';
 import { PublicSurveyView } from './components/PublicSurveyView';
 import { ShareModal } from './components/ShareModal';
+import { LoginView } from './components/LoginView';
+import { UsersView } from './components/UsersView';
 import { ApiService } from './services/api';
+import { AuthService } from './services/authService';
 import { 
   Survey, 
   Question, 
@@ -16,11 +19,15 @@ import {
   Respondent, 
   Answer, 
   SurveyStatus,
-  GoogleAppsScriptConfig 
+  GoogleAppsScriptConfig,
+  AppUser
 } from './types';
 import { Loader2 } from 'lucide-react';
 
 export function App() {
+  // Autenticação: usuário logado (null = não autenticado)
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(() => AuthService.getCurrentUser());
+
   // Inicialização e dados centrais (sincronizados com Google Sheets)
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -106,7 +113,11 @@ export function App() {
   useEffect(() => {
     ApiService.init();
     setGasConfig(ApiService.getGasConfig());
-    refreshDataFromSheets();
+    // Só busca os dados administrativos se já houver um usuário logado
+    // (pesquisas públicas de resposta não precisam de login e são carregadas à parte)
+    if (AuthService.getCurrentUser()) {
+      refreshDataFromSheets();
+    }
 
     const handleUrlRouting = () => {
       const urlParams = new URLSearchParams(window.location.search);
@@ -186,7 +197,8 @@ export function App() {
         await ApiService.updateSurveyStatus(updatedSurvey.id, updatedSurvey.status);
         showToast(`Pesquisa "${updatedSurvey.titulo}" atualizada no Google Sheets!`);
       } else {
-        const newSurvey = await ApiService.createSurvey(surveyData, questionsData);
+        const surveyDataComDono = { ...surveyData, criado_por: currentUser?.id || surveyData.criado_por };
+        const newSurvey = await ApiService.createSurvey(surveyDataComDono, questionsData);
         // Atualizar imediatamente o estado de surveys para que apareça sem atraso
         setSurveys(ApiService.getSurveys());
         showToast(`Pesquisa "${newSurvey.titulo}" criada com sucesso no Google Sheets!`);
@@ -241,6 +253,23 @@ export function App() {
     } catch (err: any) {
       showToast(`Erro ao excluir pesquisa: ${err.message || err}`);
     }
+  };
+
+  // Ações de Autenticação
+  const handleLoginSuccess = (user: AppUser) => {
+    setCurrentUser(user);
+    refreshDataFromSheets();
+  };
+
+  const handleLogout = async () => {
+    await AuthService.logout();
+    setCurrentUser(null);
+    setSurveys([]);
+    setQuestions([]);
+    setOptions([]);
+    setRespondents([]);
+    setAnswers([]);
+    setActiveTab('dashboard');
   };
 
   const handleOpenPublicView = (surveyId: string) => {
@@ -335,6 +364,14 @@ export function App() {
     );
   }
 
+  // ÁREA ADMINISTRATIVA: exige login (fora da rota pública de resposta acima)
+  if (!currentUser) {
+    return <LoginView onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  // Usuários que já são "user" comum não devem ficar presos na tela de Usuários (só ADM)
+  const effectiveTab = (activeTab === 'users' && currentUser.role !== 'admin') ? 'dashboard' : activeTab;
+
   // Obter perguntas e opções da pesquisa atualmente em análise
   const currentSurveyQuestions = activeSurveyId
     ? questions.filter((q) => q.survey_id === activeSurveyId)
@@ -362,7 +399,7 @@ export function App() {
 
       {/* Sidebar Navigation */}
       <Sidebar
-        activeTab={activeTab}
+        activeTab={effectiveTab}
         onTabChange={(tab) => {
           setActiveTab(tab);
         }}
@@ -371,6 +408,8 @@ export function App() {
         totalResponsesCount={respondents.length}
         isMobileOpen={mobileMenuOpen}
         onCloseMobile={() => setMobileMenuOpen(false)}
+        currentUser={currentUser}
+        onLogout={handleLogout}
       />
 
       {/* Main Content Area */}
@@ -382,14 +421,14 @@ export function App() {
           onOpenNewSurvey={handleOpenNewSurvey}
           onRefreshData={refreshDataFromSheets}
           isRefreshing={isRefreshing}
-          activeSurveyTitle={activeTab === 'analytics' && activeSurvey ? activeSurvey.titulo : undefined}
+          activeSurveyTitle={effectiveTab === 'analytics' && activeSurvey ? activeSurvey.titulo : undefined}
           gasConfig={gasConfig}
           onOpenSettings={() => setActiveTab('settings')}
         />
 
         {/* View Switcher */}
         <main className="flex-1 pb-16">
-          {activeTab === 'dashboard' && (
+          {effectiveTab === 'dashboard' && (
             <GeneralDashboard
               surveys={surveys}
               totalResponsesCount={respondents.length}
@@ -404,7 +443,7 @@ export function App() {
             />
           )}
 
-          {activeTab === 'surveys' && (
+          {effectiveTab === 'surveys' && (
             <SurveyList
               surveys={surveys}
               questions={questions}
@@ -423,7 +462,7 @@ export function App() {
             />
           )}
 
-          {activeTab === 'builder' && (
+          {effectiveTab === 'builder' && (
             <SurveyBuilder
               initialSurvey={editingSurvey}
               initialQuestions={editingSurvey ? questions.filter((q) => q.survey_id === editingSurvey.id) : undefined}
@@ -434,7 +473,7 @@ export function App() {
             />
           )}
 
-          {activeTab === 'analytics' && (
+          {effectiveTab === 'analytics' && (
             activeSurvey ? (
               <AnalyticsView
                 survey={activeSurvey}
@@ -460,7 +499,11 @@ export function App() {
             )
           )}
 
-          {activeTab === 'settings' && (
+          {effectiveTab === 'users' && currentUser.role === 'admin' && (
+            <UsersView />
+          )}
+
+          {effectiveTab === 'settings' && (
             <SettingsView
               config={gasConfig}
               onSaveConfig={(cfg) => {
