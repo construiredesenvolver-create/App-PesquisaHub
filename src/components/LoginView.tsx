@@ -5,11 +5,12 @@ import { AppUser } from '../types';
 
 interface LoginViewProps {
   onLoginSuccess: (user: AppUser) => void;
+  logoUrl?: string;
 }
 
 type Screen = 'login' | 'trocarSenha' | 'esqueciSenha';
 
-export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, logoUrl }) => {
   const [screen, setScreen] = useState<Screen>('login');
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
@@ -82,9 +83,17 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-md rounded-3xl shadow-xl shadow-slate-200/60 border border-slate-200 overflow-hidden">
         <div className="p-8 bg-gradient-to-br from-blue-600 to-indigo-700 text-white text-center">
-          <div className="w-14 h-14 rounded-2xl bg-white/15 flex items-center justify-center mx-auto mb-3">
-            <BarChart3 className="w-7 h-7 text-white" />
-          </div>
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt="Logo"
+              className="w-14 h-14 rounded-2xl object-cover mx-auto mb-3 border-2 border-white/30 shadow-md"
+            />
+          ) : (
+            <div className="w-14 h-14 rounded-2xl bg-white/15 flex items-center justify-center mx-auto mb-3">
+              <BarChart3 className="w-7 h-7 text-white" />
+            </div>
+          )}
           <h1 className="text-xl font-extrabold tracking-tight">PesquisaHub</h1>
           <p className="text-xs text-blue-100 mt-1">Inteligência de Respostas</p>
         </div>
