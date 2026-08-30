@@ -840,6 +840,10 @@ function renderStandaloneSurveyHtml(surveyId, e) {
   }
 
   var surveyJsonStr = JSON.stringify({ survey: survey, questions: questions, options: options }).replace(/</g, '\\u003c');
+  // URL fixa e confiável do deployment atual (NUNCA usar window.location.href no cliente,
+  // pois o Google redireciona a página renderizada para um domínio googleusercontent.com,
+  // que não processa doPost corretamente e devolve HTML em vez de JSON).
+  var scriptUrl = ScriptApp.getService().getUrl();
 
   var html = '<!DOCTYPE html>' +
 '<html lang="pt-BR">' +
@@ -922,6 +926,7 @@ function renderStandaloneSurveyHtml(surveyId, e) {
 '  ' +
 '  <script>' +
 '    var surveyData = ' + surveyJsonStr + ';' +
+'    var SCRIPT_URL = "' + scriptUrl + '";' +
 '    var container = document.getElementById("questionsContainer");' +
 '    ' +
 '    function renderQuestions() {' +
@@ -1030,7 +1035,7 @@ function renderStandaloneSurveyHtml(surveyId, e) {
 '        }' +
 '      };' +
 '      ' +
-'      fetch(window.location.href.split("?")[0], {' +
+'      fetch(SCRIPT_URL, {' +
 '        method: "POST",' +
 '        headers: { "Content-Type": "text/plain;charset=utf-8" },' +
 '        body: JSON.stringify(payload)' +
