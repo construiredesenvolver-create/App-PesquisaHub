@@ -102,6 +102,50 @@ export const QuestionAnalyticsCard: React.FC<QuestionAnalyticsCardProps> = ({
     });
   };
 
+  // Perguntas do tipo "Foto" não usam gráfico: mostram uma galeria com as fotos enviadas
+  if (questionType === 'foto') {
+    const photoUrls = distribution
+      .map((d) => d.optionText)
+      .filter((url) => typeof url === 'string' && url.startsWith('http'));
+
+    return (
+      <div className="bg-white rounded-3xl p-6 md:p-7 border border-slate-200/90 shadow-xs space-y-5">
+        <div className="flex items-center gap-2">
+          <span className="w-6 h-6 rounded-lg bg-blue-50 text-blue-700 font-bold text-xs flex items-center justify-center border border-blue-100">
+            {questionIndex + 1}
+          </span>
+          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Foto</span>
+        </div>
+
+        <div>
+          <h3 className="text-base md:text-lg font-bold text-slate-900 leading-snug">{questionTitle}</h3>
+          {questionDescription && <p className="text-xs text-slate-500 mt-1">{questionDescription}</p>}
+          <p className="text-xs text-slate-500 mt-1">
+            {totalAnswers} de {totalRespondents} respondentes enviaram foto ({responseRate}%)
+          </p>
+        </div>
+
+        {photoUrls.length === 0 ? (
+          <p className="text-xs text-slate-400 italic">Nenhuma foto enviada ainda.</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {photoUrls.map((url, i) => (
+              <a
+                key={i}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block aspect-square rounded-2xl overflow-hidden border border-slate-200 hover:opacity-90 transition-opacity bg-slate-50"
+              >
+                <img src={url} alt={`Foto enviada ${i + 1}`} className="w-full h-full object-cover" loading="lazy" />
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-3xl p-6 md:p-7 border border-slate-200/90 shadow-xs space-y-6">
       
