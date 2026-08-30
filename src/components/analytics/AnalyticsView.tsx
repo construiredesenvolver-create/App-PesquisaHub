@@ -26,7 +26,7 @@ import {
   SurveyFilter 
 } from '../../types';
 import { AnalyticsEngine } from '../../services/analyticsEngine';
-import { QuestionAnalyticsCard } from './QuestionAnalyticsCard';
+import { QuestionAnalyticsCard, QuestionChartType } from './QuestionAnalyticsCard';
 import { CrossTabulationView } from './CrossTabulationView';
 import { IndividualResponsesTable } from './IndividualResponsesTable';
 import { ExportReportView } from './ExportReportView';
@@ -60,6 +60,20 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('questions');
   const [showFilters, setShowFilters] = useState(false);
+
+  // Tipo de gráfico escolhido por pergunta (compartilhado com a exportação em PDF,
+  // que replica exatamente o gráfico que está sendo visualizado na tela)
+  const [chartTypeByQuestion, setChartTypeByQuestion] = useState<Record<string, QuestionChartType>>({});
+
+  const handleChartTypeChange = (questionId: string, chartType: QuestionChartType) => {
+    setChartTypeByQuestion((prev) => ({ ...prev, [questionId]: chartType }));
+  };
+
+  const getChartTypeForQuestion = (questionId: string, recommendedChart: string): QuestionChartType => {
+    if (chartTypeByQuestion[questionId]) return chartTypeByQuestion[questionId];
+    return recommendedChart === 'donut' ? 'donut' : 'horizontal_bar';
+  };
+
 
   // Estados de Drill-Down Interativo
   const [drillDownTarget, setDrillDownTarget] = useState<DrillDownTarget | null>(null);
@@ -435,6 +449,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               questionIndex={index}
               surveyTitle={survey.titulo}
               onDrillDown={handleOpenDrillDown}
+              chartType={getChartTypeForQuestion(qa.questionId, qa.recommendedChart)}
+              onChartTypeChange={handleChartTypeChange}
             />
           ))}
         </div>
@@ -466,6 +482,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         <ExportReportView
           analyticsData={analyticsData}
           onExportCSV={() => onExportCSV(survey.id)}
+          getChartTypeForQuestion={getChartTypeForQuestion}
         />
       )}
 
