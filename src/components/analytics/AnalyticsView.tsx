@@ -27,6 +27,7 @@ import {
 } from '../../types';
 import { AnalyticsEngine } from '../../services/analyticsEngine';
 import { QuestionAnalyticsCard, QuestionChartType } from './QuestionAnalyticsCard';
+import { SentimentAnalysisView } from './SentimentAnalysisView';
 import { CrossTabulationView } from './CrossTabulationView';
 import { IndividualResponsesTable } from './IndividualResponsesTable';
 import { ExportReportView } from './ExportReportView';
@@ -45,7 +46,7 @@ interface AnalyticsViewProps {
   onExportCSV: (surveyId: string) => void;
 }
 
-export type AnalyticsTab = 'questions' | 'crosstab' | 'respondents' | 'report';
+export type AnalyticsTab = 'questions' | 'crosstab' | 'respondents' | 'sentiment' | 'report';
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   survey,
@@ -307,6 +308,18 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           </button>
 
           <button
+            onClick={() => setActiveTab('sentiment')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
+              activeTab === 'sentiment'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>Sentimento & IA</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('report')}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
               activeTab === 'report'
@@ -476,6 +489,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           answers={analyticsData.answers}
           onExportCSV={() => onExportCSV(survey.id)}
         />
+      )}
+
+      {activeTab === 'sentiment' && (
+        <SentimentAnalysisView analyticsData={analyticsData} />
       )}
 
       {activeTab === 'report' && (
