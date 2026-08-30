@@ -1,0 +1,6 @@
+{
+  "name": "PesquisaHub",
+  "description": "Sistema completo de criação, coleta e inteligência de respostas com motor analítico estatístico e integração com Google Sheets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
