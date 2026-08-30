@@ -208,6 +208,11 @@ export interface SentimentAnalysisResult {
   atualizadoEm: string;
 }
 
+export interface AppSettings {
+  logoUrl: string;
+  nomeExibicao: string;
+}
+
 export interface DrillDownTarget {
   type: 'question_option' | 'crosstab_cell' | 'satisfaction_group';
   surveyTitle: string;
