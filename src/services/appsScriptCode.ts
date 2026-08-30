@@ -5,7 +5,7 @@
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * =========================================================================
  * PESQUISAHUB — BACKEND API (GOOGLE APPS SCRIPT)
- * Versão: 1.2.0 (Persistência Confiável, IDs Únicos & Suporte Multi-Endpoint)
+ * Versão: 1.3.0 (Persistência Confiável, IDs Únicos, Multi-Endpoint & Autenticação Multiusuário)
  * 
  * INSTRUÇÕES RÁPIDAS DE IMPLANTAÇÃO:
  * 1. Crie uma nova planilha no Google Sheets (ex: "PesquisaHub — Banco de Dados").
@@ -30,8 +30,15 @@ var SHEETS = {
   RESPONDENTS: 'Respondents',
   ANSWERS: 'Answers',
   SETTINGS: 'Settings',
-  LOGS: 'Logs'
+  LOGS: 'Logs',
+  USERS: 'Users',
+  SESSIONS: 'Sessions'
 };
+
+// E-mail do administrador inicial (recebe a conta ADM automaticamente na primeira execução)
+var ADMIN_SEED_EMAIL = 'cristianokuhn7@gmail.com';
+// Duração da sessão de login, em horas
+var SESSION_DURATION_HOURS = 24;
 
 /**
  * Inicializa a estrutura de abas e cabeçalhos na planilha se não existirem.
@@ -67,6 +74,14 @@ function initDatabase() {
     {
       name: SHEETS.LOGS,
       headers: ['id', 'timestamp', 'acao', 'detalhes', 'status']
+    },
+    {
+      name: SHEETS.USERS,
+      headers: ['id', 'nome', 'email', 'senha_hash', 'salt', 'role', 'deve_trocar_senha', 'ativo', 'criado_em', 'ultimo_login']
+    },
+    {
+      name: SHEETS.SESSIONS,
+      headers: ['token', 'user_id', 'criado_em', 'expira_em']
     }
   ];
 
@@ -80,8 +95,346 @@ function initDatabase() {
     }
   });
 
+  ensureAdminSeed();
+
   logOperation('INIT_DB', 'Estrutura de abas inicializada/verificada com sucesso.', 'SUCCESS');
   return { status: 'ok', success: true, message: 'Planilha configurada e pronta para operar!' };
+}
+
+/**
+ * Garante que exista pelo menos um usuário ADM. Na primeira execução, cria a conta
+ * administradora com uma senha temporária, que precisa ser trocada no primeiro acesso.
+ */
+function ensureAdminSeed() {
+  var sheet = getOrCreateSheet(SHEETS.USERS);
+  var users = getRowsAsObjects(sheet);
+  var hasAdmin = users.some(function(u) { return String(u.role) === 'admin'; });
+  if (hasAdmin) return;
+
+  var tempPassword = 'Trocar@123';
+  var salt = Utilities.getUuid();
+  var userId = 'user_' + Utilities.getUuid().substring(0, 8);
+
+  sheet.appendRow([
+    userId,
+    'Administrador',
+    ADMIN_SEED_EMAIL.toLowerCase(),
+    hashPassword(tempPassword, salt),
+    salt,
+    'admin',
+    'TRUE',
+    'TRUE',
+    new Date().toISOString(),
+    ''
+  ]);
+
+  logOperation('SEED_ADMIN', 'Usuário administrador inicial criado para ' + ADMIN_SEED_EMAIL + ' com senha temporária "' + tempPassword + '" (deve ser trocada no primeiro acesso).', 'SUCCESS');
+}
+
+// ==========================================
+// AUTENTICAÇÃO, USUÁRIOS E SESSÕES
+// ==========================================
+
+function generateSalt() {
+  return Utilities.getUuid();
+}
+
+function hashPassword(plainPassword, salt) {
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(plainPassword) + '::' + String(salt));
+  return digest.map(function(byte) {
+    var v = (byte < 0 ? byte + 256 : byte).toString(16);
+    return v.length === 1 ? '0' + v : v;
+  }).join('');
+}
+
+function generateTempPassword() {
+  // Senha temporária legível, fácil de repassar ao usuário (ex: Ph7k-Qw29)
+  var part1 = Utilities.getUuid().substring(0, 4);
+  var part2 = Utilities.getUuid().substring(0, 4);
+  return (part1 + '-' + part2);
+}
+
+function findUserByEmail(email) {
+  var clean = String(email || '').trim().toLowerCase();
+  var rows = getRowsAsObjects(getOrCreateSheet(SHEETS.USERS));
+  return rows.find(function(u) { return String(u.email || '').trim().toLowerCase() === clean; }) || null;
+}
+
+function findUserById(userId) {
+  var rows = getRowsAsObjects(getOrCreateSheet(SHEETS.USERS));
+  return rows.find(function(u) { return String(u.id) === String(userId); }) || null;
+}
+
+function sanitizeUser(userRaw) {
+  if (!userRaw) return null;
+  return {
+    id: userRaw.id,
+    nome: userRaw.nome || '',
+    email: userRaw.email || '',
+    role: userRaw.role || 'user',
+    deve_trocar_senha: userRaw.deve_trocar_senha === true || userRaw.deve_trocar_senha === 'TRUE' || userRaw.deve_trocar_senha === 'true',
+    ativo: userRaw.ativo !== false && userRaw.ativo !== 'FALSE' && userRaw.ativo !== 'false',
+    criado_em: userRaw.criado_em || '',
+    ultimo_login: userRaw.ultimo_login || ''
+  };
+}
+
+function createSession(userId) {
+  var token = Utilities.getUuid() + '-' + Utilities.getUuid();
+  var now = new Date();
+  var expira = new Date(now.getTime() + SESSION_DURATION_HOURS * 60 * 60 * 1000);
+  getOrCreateSheet(SHEETS.SESSIONS).appendRow([token, userId, now.toISOString(), expira.toISOString()]);
+  return token;
+}
+
+function getUserFromToken(token) {
+  if (!token) return null;
+  var rows = getRowsAsObjects(getOrCreateSheet(SHEETS.SESSIONS));
+  var session = rows.find(function(s) { return s.token === token; });
+  if (!session) return null;
+  if (new Date(session.expira_em).getTime() < Date.now()) return null;
+  var userRaw = findUserById(session.user_id);
+  if (!userRaw || (userRaw.ativo === false || userRaw.ativo === 'FALSE' || userRaw.ativo === 'false')) return null;
+  return userRaw;
+}
+
+/**
+ * Garante que o token pertence a um usuário ADM ativo. Lança erro caso contrário.
+ */
+function requireAdmin(token) {
+  var userRaw = getUserFromToken(token);
+  if (!userRaw || String(userRaw.role) !== 'admin') {
+    throw new Error('Acesso negado: esta ação requer permissão de administrador.');
+  }
+  return userRaw;
+}
+
+function sendMailSafe(toEmail, subject, body) {
+  try {
+    if (toEmail) {
+      MailApp.sendEmail(toEmail, subject, body);
+    }
+  } catch (e) {
+    logOperation('MAIL_ERROR', 'Falha ao enviar e-mail para ' + toEmail + ': ' + e.toString(), 'ERROR');
+  }
+}
+
+function doLogin(email, senha) {
+  if (!email || !senha) throw new Error('Informe e-mail e senha.');
+  var userRaw = findUserByEmail(email);
+  if (!userRaw) throw new Error('E-mail ou senha inválidos.');
+  if (userRaw.ativo === false || userRaw.ativo === 'FALSE' || userRaw.ativo === 'false') {
+    throw new Error('Este usuário está desativado. Fale com o administrador.');
+  }
+  var hash = hashPassword(senha, userRaw.salt);
+  if (hash !== userRaw.senha_hash) {
+    throw new Error('E-mail ou senha inválidos.');
+  }
+
+  // Atualizar último login
+  var sheet = getOrCreateSheet(SHEETS.USERS);
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var idCol = headers.indexOf('id');
+  var ultimoLoginCol = headers.indexOf('ultimo_login');
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idCol]) === String(userRaw.id)) {
+      sheet.getRange(i + 1, ultimoLoginCol + 1).setValue(new Date().toISOString());
+      break;
+    }
+  }
+
+  var token = createSession(userRaw.id);
+  logOperation('LOGIN', 'Login realizado: ' + userRaw.email, 'SUCCESS');
+  return { token: token, user: sanitizeUser(userRaw) };
+}
+
+function doChangePassword(token, novaSenha) {
+  var userRaw = getUserFromToken(token);
+  if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
+  if (!novaSenha || String(novaSenha).length < 6) {
+    throw new Error('A nova senha deve ter pelo menos 6 caracteres.');
+  }
+
+  var salt = generateSalt();
+  var hash = hashPassword(novaSenha, salt);
+
+  var sheet = getOrCreateSheet(SHEETS.USERS);
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var idCol = headers.indexOf('id');
+  var hashCol = headers.indexOf('senha_hash');
+  var saltCol = headers.indexOf('salt');
+  var deveCol = headers.indexOf('deve_trocar_senha');
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idCol]) === String(userRaw.id)) {
+      sheet.getRange(i + 1, hashCol + 1).setValue(hash);
+      sheet.getRange(i + 1, saltCol + 1).setValue(salt);
+      sheet.getRange(i + 1, deveCol + 1).setValue('FALSE');
+      break;
+    }
+  }
+
+  logOperation('CHANGE_PASSWORD', 'Senha atualizada pelo próprio usuário: ' + userRaw.email, 'SUCCESS');
+  return { success: true, message: 'Senha atualizada com sucesso.' };
+}
+
+function doCreateUser(token, novoUsuario) {
+  requireAdmin(token);
+  if (!novoUsuario || !novoUsuario.email || !novoUsuario.nome) {
+    throw new Error('Nome e e-mail são obrigatórios para criar um usuário.');
+  }
+  var emailClean = String(novoUsuario.email).trim().toLowerCase();
+  if (findUserByEmail(emailClean)) {
+    throw new Error('Já existe um usuário cadastrado com este e-mail.');
+  }
+
+  var tempPassword = generateTempPassword();
+  var salt = generateSalt();
+  var userId = 'user_' + Utilities.getUuid().substring(0, 8);
+  var role = novoUsuario.role === 'admin' ? 'admin' : 'user';
+
+  getOrCreateSheet(SHEETS.USERS).appendRow([
+    userId,
+    String(novoUsuario.nome).trim(),
+    emailClean,
+    hashPassword(tempPassword, salt),
+    salt,
+    role,
+    'TRUE',
+    'TRUE',
+    new Date().toISOString(),
+    ''
+  ]);
+
+  sendMailSafe(
+    emailClean,
+    'Seu acesso ao PesquisaHub foi criado',
+    'Olá, ' + novoUsuario.nome + '!\n\nSua conta no PesquisaHub foi criada.\n\nE-mail de acesso: ' + emailClean + '\nSenha temporária: ' + tempPassword + '\n\nNo primeiro acesso, você precisará cadastrar uma nova senha.'
+  );
+
+  logOperation('CREATE_USER', 'Novo usuário criado: ' + emailClean + ' (role: ' + role + ')', 'SUCCESS');
+  return { success: true, id: userId, tempPassword: tempPassword, message: 'Usuário criado. Uma senha temporária foi enviada por e-mail (e também retornada abaixo, caso o envio falhe).' };
+}
+
+function doResetPassword(token, userIdAlvo) {
+  requireAdmin(token);
+  var userRaw = findUserById(userIdAlvo);
+  if (!userRaw) throw new Error('Usuário não encontrado.');
+
+  var tempPassword = generateTempPassword();
+  var salt = generateSalt();
+  var hash = hashPassword(tempPassword, salt);
+
+  var sheet = getOrCreateSheet(SHEETS.USERS);
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var idCol = headers.indexOf('id');
+  var hashCol = headers.indexOf('senha_hash');
+  var saltCol = headers.indexOf('salt');
+  var deveCol = headers.indexOf('deve_trocar_senha');
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idCol]) === String(userRaw.id)) {
+      sheet.getRange(i + 1, hashCol + 1).setValue(hash);
+      sheet.getRange(i + 1, saltCol + 1).setValue(salt);
+      sheet.getRange(i + 1, deveCol + 1).setValue('TRUE');
+      break;
+    }
+  }
+
+  sendMailSafe(
+    userRaw.email,
+    'Sua senha do PesquisaHub foi redefinida',
+    'Olá, ' + userRaw.nome + '!\n\nO administrador redefiniu sua senha de acesso ao PesquisaHub.\n\nSenha temporária: ' + tempPassword + '\n\nNo próximo acesso, você precisará cadastrar uma nova senha.'
+  );
+
+  logOperation('RESET_PASSWORD', 'Senha redefinida pelo administrador para: ' + userRaw.email, 'SUCCESS');
+  return { success: true, tempPassword: tempPassword, message: 'Senha redefinida. Uma senha temporária foi enviada por e-mail (e também retornada abaixo, caso o envio falhe).' };
+}
+
+function doListUsers(token) {
+  requireAdmin(token);
+  var rows = getRowsAsObjects(getOrCreateSheet(SHEETS.USERS));
+  return rows.map(sanitizeUser).sort(function(a, b) {
+    return (a.criado_em || '').localeCompare(b.criado_em || '');
+  });
+}
+
+function doToggleUserActive(token, userIdAlvo, ativo) {
+  var requester = requireAdmin(token);
+  if (String(requester.id) === String(userIdAlvo)) {
+    throw new Error('Você não pode desativar a própria conta.');
+  }
+  var sheet = getOrCreateSheet(SHEETS.USERS);
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var idCol = headers.indexOf('id');
+  var ativoCol = headers.indexOf('ativo');
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idCol]) === String(userIdAlvo)) {
+      sheet.getRange(i + 1, ativoCol + 1).setValue(ativo ? 'TRUE' : 'FALSE');
+      logOperation('TOGGLE_USER', 'Usuário ' + userIdAlvo + ' definido como ativo=' + ativo, 'SUCCESS');
+      return { success: true };
+    }
+  }
+  throw new Error('Usuário não encontrado.');
+}
+
+function doRequestPasswordReset(email) {
+  var userRaw = findUserByEmail(email);
+  // Não revelar se o e-mail existe ou não (evita enumeração de contas)
+  if (userRaw) {
+    var admins = getRowsAsObjects(getOrCreateSheet(SHEETS.USERS)).filter(function(u) { return String(u.role) === 'admin'; });
+    admins.forEach(function(admin) {
+      sendMailSafe(
+        admin.email,
+        'Solicitação de redefinição de senha - PesquisaHub',
+        'O usuário ' + userRaw.nome + ' (' + userRaw.email + ') solicitou a redefinição de senha.\n\nAcesse o painel de Usuários no PesquisaHub para forçar a redefinição.'
+      );
+    });
+    logOperation('REQUEST_RESET', 'Solicitação de reset recebida para: ' + userRaw.email, 'SUCCESS');
+  }
+  return { success: true, message: 'Se o e-mail existir em nossa base, o administrador foi notificado para redefinir sua senha.' };
+}
+
+function doLogout(token) {
+  var sheet = getOrCreateSheet(SHEETS.SESSIONS);
+  var data = sheet.getDataRange().getValues();
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (data[i][0] === token) {
+      sheet.deleteRow(i + 1);
+    }
+  }
+  return { success: true };
+}
+
+/**
+ * Filtra o payload completo de dados para que usuários não-admin só enxerguem
+ * as próprias pesquisas (e dados relacionados a elas).
+ */
+function filterDataForUser(fullData, userRaw) {
+  // Sem sessão válida: não expor nenhum dado (evita vazar tudo para chamadas sem login)
+  if (!userRaw) {
+    return { surveys: [], questions: [], options: [], respondents: [], answers: [] };
+  }
+  if (String(userRaw.role) === 'admin') return fullData;
+
+  var ownedSurveyIds = {};
+  var surveys = fullData.surveys.filter(function(s) {
+    var isOwner = String(s.criado_por) === String(userRaw.id);
+    if (isOwner) ownedSurveyIds[s.id] = true;
+    return isOwner;
+  });
+  var questions = fullData.questions.filter(function(q) { return ownedSurveyIds[q.survey_id]; });
+  var ownedQuestionIds = {};
+  questions.forEach(function(q) { ownedQuestionIds[q.id] = true; });
+  var options = fullData.options.filter(function(o) { return ownedQuestionIds[o.question_id]; });
+  var respondents = fullData.respondents.filter(function(r) { return ownedSurveyIds[r.survey_id]; });
+  var answers = fullData.answers.filter(function(a) { return ownedSurveyIds[a.survey_id]; });
+
+  return { surveys: surveys, questions: questions, options: options, respondents: respondents, answers: answers };
 }
 
 /**
@@ -115,7 +468,7 @@ function doGet(e) {
           success: true,
           message: 'API PesquisaHub operacional', 
           timestamp: new Date().toISOString(),
-          version: '1.2.1'
+          version: '1.3.0'
         };
         break;
 
@@ -128,7 +481,8 @@ function doGet(e) {
       case 'readAll':
       case 'all':
       case 'get_all_data':
-        var allData = getAllDatabaseData();
+        var requestUser = getUserFromToken(e.parameter && e.parameter.token);
+        var allData = filterDataForUser(getAllDatabaseData(), requestUser);
         responseData = { 
           status: 'ok', 
           success: true,
@@ -141,7 +495,11 @@ function doGet(e) {
       case 'listSurveys':
       case 'surveys':
       case 'get_surveys':
+        var requestUserForList = getUserFromToken(e.parameter && e.parameter.token);
         var surveysList = getSurveysList();
+        if (requestUserForList && String(requestUserForList.role) !== 'admin') {
+          surveysList = surveysList.filter(function(s) { return String(s.criado_por) === String(requestUserForList.id); });
+        }
         responseData = { 
           status: 'ok', 
           success: true,
@@ -157,6 +515,10 @@ function doGet(e) {
         var surveyId = (e.parameter && (e.parameter.id || e.parameter.survey_id));
         if (!surveyId) throw new Error('Parâmetro id ou survey_id é obrigatório');
         var surveyData = getFullSurvey(surveyId);
+        var requesterForSurvey = getUserFromToken(e.parameter && e.parameter.token);
+        if (requesterForSurvey && String(requesterForSurvey.role) !== 'admin' && String(surveyData.survey.criado_por) !== String(requesterForSurvey.id)) {
+          throw new Error('Acesso negado: esta pesquisa pertence a outro usuário.');
+        }
         responseData = { 
           status: 'ok', 
           success: true,
@@ -172,6 +534,13 @@ function doGet(e) {
       case 'get_responses':
         var sId = (e.parameter && (e.parameter.id || e.parameter.survey_id));
         if (!sId) throw new Error('Parâmetro id é obrigatório');
+        var requesterForResp = getUserFromToken(e.parameter && e.parameter.token);
+        if (requesterForResp && String(requesterForResp.role) !== 'admin') {
+          var ownerCheck = getFullSurvey(sId).survey;
+          if (String(ownerCheck.criado_por) !== String(requesterForResp.id)) {
+            throw new Error('Acesso negado: esta pesquisa pertence a outro usuário.');
+          }
+        }
         responseData = { 
           status: 'ok', 
           success: true,
@@ -261,6 +630,46 @@ function doPost(e) {
           data: recorded,
           message: recorded.message || 'Resposta registrada com sucesso'
         };
+        break;
+
+      case 'login':
+        var loginResult = doLogin(postData.email, postData.senha);
+        responseData = { status: 'ok', success: true, data: loginResult };
+        break;
+
+      case 'changePassword':
+        var changeResult = doChangePassword(postData.token, postData.novaSenha);
+        responseData = { status: 'ok', success: true, data: changeResult, message: changeResult.message };
+        break;
+
+      case 'createUser':
+        var createUserResult = doCreateUser(postData.token, postData.usuario);
+        responseData = { status: 'ok', success: true, data: createUserResult, message: createUserResult.message };
+        break;
+
+      case 'resetPassword':
+        var resetResult = doResetPassword(postData.token, postData.userId);
+        responseData = { status: 'ok', success: true, data: resetResult, message: resetResult.message };
+        break;
+
+      case 'toggleUserActive':
+        var toggleResult = doToggleUserActive(postData.token, postData.userId, postData.ativo);
+        responseData = { status: 'ok', success: true, data: toggleResult };
+        break;
+
+      case 'listUsers':
+        var usersList = doListUsers(postData.token);
+        responseData = { status: 'ok', success: true, users: usersList, data: usersList };
+        break;
+
+      case 'requestPasswordReset':
+        var requestResetResult = doRequestPasswordReset(postData.email);
+        responseData = { status: 'ok', success: true, data: requestResetResult, message: requestResetResult.message };
+        break;
+
+      case 'logout':
+        doLogout(postData.token);
+        responseData = { status: 'ok', success: true };
         break;
 
       default:
@@ -1086,4 +1495,5 @@ function renderStandaloneSurveyHtml(surveyId, e) {
     .setTitle((survey.titulo || 'Pesquisa') + ' | PesquisaHub')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
+
 `;
