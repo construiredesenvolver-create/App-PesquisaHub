@@ -59,8 +59,16 @@ var SESSION_DURATION_HOURS = 24;
  * e os e-mails falham com "Exception: Você não tem permissão para chamar...".
  */
 function autorizarPermissoes() {
-  DriveApp.getRootFolder();
+  // Testa exatamente as mesmas ações usadas no upload real de fotos/logo,
+  // para que o Google peça (e você aprove) a permissão completa do Drive de uma vez.
+  var testFolder = DriveApp.createFolder('PesquisaHub - Teste de Permissao (pode apagar)');
+  var testFile = testFolder.createFile('teste.txt', 'teste de permissao', MimeType.PLAIN_TEXT);
+  testFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  testFile.setTrashed(true);
+  testFolder.setTrashed(true);
+
   MailApp.getRemainingDailyQuota();
+
   Logger.log('Permissões concedidas com sucesso!');
 }
 
