@@ -14,9 +14,14 @@ import {
   Archive,
   AlertTriangle,
   User,
-  ShieldCheck
+  ShieldCheck,
+  Camera,
+  Loader2,
+  X
 } from 'lucide-react';
 import { Survey, Question, Option } from '../types';
+import { ApiService } from '../services/api';
+import { compressImageToBase64 } from '../services/imageUtils';
 
 interface PublicSurveyViewProps {
   survey: Survey;
@@ -487,7 +492,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
 
                 {/* Opções de Resposta */}
                 <div className="space-y-2.5 pt-1">
-                  {renderQuestionInputs(currentQuestion, options, answers, handleSingleSelect, handleMultipleSelect, handleTextChange)}
+                  {renderQuestionInputs(currentQuestion, options, answers, handleSingleSelect, handleMultipleSelect, handleTextChange, survey.id)}
                 </div>
 
                 {/* Controles de Navegação */}
@@ -576,7 +581,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
                 </div>
 
                 <div className="space-y-2.5">
-                  {renderQuestionInputs(q, options, answers, handleSingleSelect, handleMultipleSelect, handleTextChange)}
+                  {renderQuestionInputs(q, options, answers, handleSingleSelect, handleMultipleSelect, handleTextChange, survey.id)}
                 </div>
               </div>
             ))}
@@ -624,7 +629,8 @@ function renderQuestionInputs(
   answers: Record<string, string | string[]>,
   onSingleSelect: (qId: string, val: string) => void,
   onMultipleSelect: (qId: string, val: string) => void,
-  onTextChange: (qId: string, val: string) => void
+  onTextChange: (qId: string, val: string) => void,
+  surveyId: string
 ) {
   const qOptions = options
     .filter((o) => o.question_id === question.id)
@@ -739,6 +745,16 @@ function renderQuestionInputs(
     );
   }
 
+  if (question.tipo === 'foto') {
+    return (
+      <PhotoAnswerInput
+        surveyId={surveyId}
+        value={(answers[question.id] as string) || ''}
+        onUploaded={(url) => onTextChange(question.id, url)}
+      />
+    );
+  }
+
   // Texto curto padrão
   return (
     <input
@@ -748,5 +764,86 @@ function renderQuestionInputs(
       placeholder="Digite sua resposta aqui..."
       className="w-full text-xs md:text-sm bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3.5 text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
     />
+  );
+}
+
+/**
+ * Campo de resposta do tipo "Foto": comprime a imagem no navegador e já envia
+ * para o backend assim que selecionada, guardando a URL retornada como a resposta.
+ */
+function PhotoAnswerInput({
+  surveyId,
+  value,
+  onUploaded
+}: {
+  surveyId: string;
+  value: string;
+  onUploaded: (url: string) => void;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleFile = async (file: File) => {
+    setError(null);
+    setUploading(true);
+    try {
+      const { base64, mimeType } = await compressImageToBase64(file);
+      const url = await ApiService.uploadPhotoAnswer(surveyId, base64, mimeType);
+      onUploaded(url);
+    } catch (err: any) {
+      setError(err.message || 'Não foi possível enviar a foto. Tente novamente.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  if (value) {
+    return (
+      <div className="relative inline-block">
+        <img
+          src={value}
+          alt="Foto enviada"
+          className="w-full max-w-xs rounded-2xl border border-slate-200 shadow-xs object-cover"
+        />
+        <button
+          type="button"
+          onClick={() => onUploaded('')}
+          className="absolute top-2 right-2 bg-white/90 hover:bg-white rounded-full p-1.5 shadow-sm"
+          title="Remover foto e enviar outra"
+        >
+          <X className="w-4 h-4 text-slate-600" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-2xl p-8 cursor-pointer hover:border-blue-400 hover:bg-blue-50/40 transition-colors">
+        {uploading ? (
+          <>
+            <Loader2 className="w-6 h-6 text-blue-600 animate-spin" />
+            <span className="text-xs font-semibold text-slate-500">Enviando foto...</span>
+          </>
+        ) : (
+          <>
+            <Camera className="w-6 h-6 text-slate-400" />
+            <span className="text-xs font-semibold text-slate-500">Toque para tirar ou enviar uma foto</span>
+          </>
+        )}
+        <input
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="hidden"
+          disabled={uploading}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) handleFile(file);
+          }}
+        />
+      </label>
+      {error && <p className="text-xs text-red-600 font-medium">{error}</p>}
+    </div>
   );
 }
