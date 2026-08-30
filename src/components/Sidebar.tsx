@@ -26,6 +26,7 @@ interface SidebarProps {
   onCloseMobile: () => void;
   currentUser?: AppUser | null;
   onLogout?: () => void;
+  logoUrl?: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -37,7 +38,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isMobileOpen,
   onCloseMobile,
   currentUser,
-  onLogout
+  onLogout,
+  logoUrl
 }) => {
   const isAdmin = currentUser?.role === 'admin';
 
@@ -61,14 +63,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Brand Header */}
         <div>
           <div className="p-5 flex items-center gap-3 border-b border-slate-800/80">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20">
-              <BarChart3 className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-extrabold text-base tracking-tight text-white font-display">PesquisaHub</span>
-                <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">V1</span>
+            {logoUrl ? (
+              <img
+                src={logoUrl}
+                alt="Logo"
+                className="w-10 h-10 rounded-xl object-cover shadow-lg shadow-blue-500/20 border border-slate-700 shrink-0"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20 shrink-0">
+                <BarChart3 className="w-5 h-5 text-white" />
               </div>
+            )}
+            <div>
+              <span className="font-extrabold text-base tracking-tight text-white font-display">PesquisaHub</span>
               <p className="text-xs text-slate-400">Inteligência de Respostas</p>
             </div>
           </div>
