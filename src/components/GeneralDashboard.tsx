@@ -15,7 +15,7 @@ import {
   Database,
   Inbox
 } from 'lucide-react';
-import { Survey, Respondent } from '../types';
+import { Survey, Respondent, AppUser } from '../types';
 
 interface GeneralDashboardProps {
   surveys: Survey[];
@@ -28,6 +28,7 @@ interface GeneralDashboardProps {
   onViewAllSurveys: () => void;
   onOpenSettings: () => void;
   onRefreshData?: () => void;
+  currentUser?: AppUser | null;
 }
 
 export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
@@ -40,11 +41,16 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
   onShareSurvey,
   onViewAllSurveys,
   onOpenSettings,
-  onRefreshData
+  onRefreshData,
+  currentUser
 }) => {
   const publishedSurveys = surveys.filter((s) => s.status === 'Publicada');
   const draftSurveys = surveys.filter((s) => s.status === 'Rascunho');
   const closedSurveys = surveys.filter((s) => s.status === 'Encerrada');
+
+  const hour = new Date().getHours();
+  const saudacao = hour < 12 ? 'Bom dia' : hour < 18 ? 'Boa tarde' : 'Boa noite';
+  const primeiroNome = currentUser?.nome ? currentUser.nome.split(' ')[0] : '';
 
   // Mapear total de respostas por pesquisa
   const surveyResponseCounts = surveys.map((s) => {
@@ -71,6 +77,9 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
             <Database className="w-3.5 h-3.5" />
             <span>Conexão Direta Google Sheets</span>
           </div>
+          {primeiroNome && (
+            <p className="text-blue-300 text-sm font-semibold">{saudacao}, {primeiroNome} 👋</p>
+          )}
           <h1 className="text-2xl md:text-4xl font-extrabold tracking-tight font-display">
             Transforme respostas em decisões estratégicas.
           </h1>
