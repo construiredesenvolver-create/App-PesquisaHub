@@ -20,13 +20,18 @@ import {
   Answer, 
   SurveyStatus,
   GoogleAppsScriptConfig,
-  AppUser
+  AppUser,
+  AppSettings
 } from './types';
 import { Loader2 } from 'lucide-react';
 
 export function App() {
   // Autenticação: usuário logado (null = não autenticado)
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => AuthService.getCurrentUser());
+
+  // Identidade visual (logo/nome customizados pelo ADM) — carregada uma vez, independente do login,
+  // pois é usada na tela de login, no menu lateral e no formulário público
+  const [appSettings, setAppSettings] = useState<AppSettings>({ logoUrl: '', nomeExibicao: '' });
 
   // Inicialização e dados centrais (sincronizados com Google Sheets)
   const [surveys, setSurveys] = useState<Survey[]>([]);
@@ -113,6 +118,8 @@ export function App() {
   useEffect(() => {
     ApiService.init();
     setGasConfig(ApiService.getGasConfig());
+    // Identidade visual (logo) é pública — carregada sempre, com ou sem login
+    ApiService.getAppSettings().then(setAppSettings);
     // Só busca os dados administrativos se já houver um usuário logado
     // (pesquisas públicas de resposta não precisam de login e são carregadas à parte)
     if (AuthService.getCurrentUser()) {
@@ -360,13 +367,14 @@ export function App() {
         options={targetSurveyData.options}
         onSubmitResponse={handleSubmitResponse}
         onBackToAdmin={handleBackFromPublicView}
+        logoUrl={appSettings.logoUrl}
       />
     );
   }
 
   // ÁREA ADMINISTRATIVA: exige login (fora da rota pública de resposta acima)
   if (!currentUser) {
-    return <LoginView onLoginSuccess={handleLoginSuccess} />;
+    return <LoginView onLoginSuccess={handleLoginSuccess} logoUrl={appSettings.logoUrl} />;
   }
 
   // Usuários que já são "user" comum não devem ficar presos na tela de Usuários (só ADM)
@@ -410,6 +418,7 @@ export function App() {
         onCloseMobile={() => setMobileMenuOpen(false)}
         currentUser={currentUser}
         onLogout={handleLogout}
+        logoUrl={appSettings.logoUrl}
       />
 
       {/* Main Content Area */}
@@ -440,6 +449,7 @@ export function App() {
               onViewAllSurveys={() => setActiveTab('surveys')}
               onOpenSettings={() => setActiveTab('settings')}
               onRefreshData={refreshDataFromSheets}
+              currentUser={currentUser}
             />
           )}
 
@@ -512,6 +522,13 @@ export function App() {
                 showToast('Configurações salvas!');
               }}
               onRefreshDataFromSheets={refreshDataFromSheets}
+              appSettings={appSettings}
+              isAdmin={currentUser.role === 'admin'}
+              onSaveAppSettings={async (logoUrl, nomeExibicao) => {
+                await ApiService.saveAppSettings(logoUrl, nomeExibicao);
+                setAppSettings({ logoUrl, nomeExibicao });
+                showToast('Identidade visual atualizada!');
+              }}
             />
           )}
         </main>
