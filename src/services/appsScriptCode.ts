@@ -569,6 +569,10 @@ function doGet(e) {
         responseData = { status: 'ok', success: true, data: cachedAnalysis };
         break;
 
+      case 'getAppSettings':
+        responseData = { status: 'ok', success: true, data: getAppSettingsMap() };
+        break;
+
       default:
         // Se a ação não for reconhecida, retorna todos os dados por padrão em vez de erro
         var defaultData = getAllDatabaseData();
@@ -701,6 +705,11 @@ function doPost(e) {
       case 'analisarSentimento':
         var sentimentResult = analisarSentimentoPergunta(postData.token, postData.surveyId, postData.questionId);
         responseData = { status: 'ok', success: true, data: sentimentResult };
+        break;
+
+      case 'saveAppSettings':
+        var savedSettings = saveAppSettings(postData.token, postData.logoUrl, postData.nomeExibicao);
+        responseData = { status: 'ok', success: true, data: savedSettings };
         break;
 
       default:
@@ -969,6 +978,58 @@ function callGeminiForSentiment(questionTitle, textos) {
     pontosPositivos: Array.isArray(resultJson.pontosPositivos) ? resultJson.pontosPositivos : [],
     pontosNegativos: Array.isArray(resultJson.pontosNegativos) ? resultJson.pontosNegativos : []
   };
+}
+
+// ==========================================
+// CONFIGURAÇÕES DE MARCA (LOGO / IDENTIDADE VISUAL)
+// ==========================================
+
+/**
+ * Lê todas as configurações de marca salvas na aba Settings como um mapa chave->valor.
+ * Leitura pública (sem exigir login), pois o formulário público também usa o logo.
+ */
+function getAppSettingsMap() {
+  var rows = getRowsAsObjects(getOrCreateSheet(SHEETS.SETTINGS));
+  var map = {};
+  rows.forEach(function(r) {
+    if (r.chave) map[r.chave] = r.valor || '';
+  });
+  return {
+    logoUrl: map['logo_url'] || '',
+    nomeExibicao: map['nome_exibicao'] || ''
+  };
+}
+
+/**
+ * Salva (ou atualiza) uma configuração de marca. Apenas ADM pode alterar.
+ */
+function saveAppSetting(token, chave, valor) {
+  requireAdmin(token);
+
+  var sheet = getOrCreateSheet(SHEETS.SETTINGS);
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var chaveCol = headers.indexOf('chave');
+  var valorCol = headers.indexOf('valor');
+  var atualizadoCol = headers.indexOf('atualizado_em');
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][chaveCol]) === String(chave)) {
+      sheet.getRange(i + 1, valorCol + 1).setValue(valor);
+      sheet.getRange(i + 1, atualizadoCol + 1).setValue(new Date().toISOString());
+      return;
+    }
+  }
+
+  sheet.appendRow([chave, valor, new Date().toISOString()]);
+}
+
+function saveAppSettings(token, logoUrl, nomeExibicao) {
+  requireAdmin(token);
+  if (logoUrl !== undefined) saveAppSetting(token, 'logo_url', logoUrl);
+  if (nomeExibicao !== undefined) saveAppSetting(token, 'nome_exibicao', nomeExibicao);
+  logOperation('SAVE_SETTINGS', 'Identidade visual atualizada.', 'SUCCESS');
+  return { success: true };
 }
 
 // ==========================================
@@ -1557,6 +1618,14 @@ function renderStandaloneSurveyHtml(surveyId, e) {
   // que não processa doPost corretamente e devolve HTML em vez de JSON).
   var scriptUrl = ScriptApp.getService().getUrl();
 
+  // Identidade visual (logo) configurada pelo administrador — exibida em um "avatar"
+  // circular de tamanho fixo, para nunca desequilibrar o layout do cabeçalho.
+  var brandSettings = {};
+  try { brandSettings = getAppSettingsMap(); } catch (brandErr) { brandSettings = {}; }
+  var logoHtml = brandSettings.logoUrl
+    ? '<img src="' + brandSettings.logoUrl + '" alt="Logo" class="w-12 h-12 rounded-full object-cover border-2 border-white/40 shadow-md shrink-0" />'
+    : '';
+
   var html = '<!DOCTYPE html>' +
 '<html lang="pt-BR">' +
 '<head>' +
@@ -1577,8 +1646,11 @@ function renderStandaloneSurveyHtml(surveyId, e) {
 '    <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-200 overflow-hidden mb-6">' +
 '      <!-- Header -->' +
 '      <div class="p-6 sm:p-8 bg-gradient-to-br from-blue-600 to-indigo-700 text-white">' +
-'        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/20 text-xs font-semibold backdrop-blur-xs mb-3">' +
-'          <span>✓ Pesquisa Oficial</span>' +
+'        <div class="flex items-center gap-3 mb-3">' +
+          logoHtml +
+'          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/20 text-xs font-semibold backdrop-blur-xs">' +
+'            <span>✓ Pesquisa Oficial</span>' +
+'          </div>' +
 '        </div>' +
 '        <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight">' + (survey.titulo || 'Pesquisa') + '</h1>' +
 '        ' + (survey.descricao ? '<p class="mt-2 text-blue-100 text-sm leading-relaxed">' + survey.descricao + '</p>' : '') +
