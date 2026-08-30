@@ -938,11 +938,6 @@ function renderStandaloneSurveyHtml(surveyId, e) {
 '        <p id="successMessage" class="text-slate-600 text-sm max-w-md mx-auto leading-relaxed">' +
 '          ' + (survey.configuracoes && survey.configuracoes.mensagem_conclusao ? survey.configuracoes.mensagem_conclusao : 'Sua resposta foi gravada com sucesso no sistema.') +
 '        </p>' +
-'        <div class="pt-6">' +
-'          <button onclick="window.location.reload()" class="px-6 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all">' +
-'            Responder Novamente' +
-'          </button>' +
-'        </div>' +
 '      </div>' +
 '    </div>' +
 '  </div>' +
