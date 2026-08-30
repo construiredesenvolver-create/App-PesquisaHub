@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   AreaChart, 
   Area, 
@@ -21,19 +21,25 @@ import {
   Calendar, 
   Users,
   Award,
-  Sparkles
+  Sparkles,
+  FileDown
 } from 'lucide-react';
+import { PdfExportModal } from './PdfExportModal';
+import { QuestionChartType } from './QuestionAnalyticsCard';
 
 interface ExportReportViewProps {
   analyticsData: SurveyAnalyticsData;
   onExportCSV: () => void;
+  getChartTypeForQuestion: (questionId: string, recommendedChart: string) => QuestionChartType;
 }
 
 export const ExportReportView: React.FC<ExportReportViewProps> = ({
   analyticsData,
-  onExportCSV
+  onExportCSV,
+  getChartTypeForQuestion
 }) => {
   const { survey, executiveSummary, questionAnalytics } = analyticsData;
+  const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);
 
   const handlePrint = () => {
     window.print();
@@ -51,11 +57,19 @@ export const ExportReportView: React.FC<ExportReportViewProps> = ({
 
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setIsPdfModalOpen(true)}
+            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
+          >
+            <FileDown className="w-3.5 h-3.5" />
+            <span>Extrair Relatório em PDF</span>
+          </button>
+
+          <button
             onClick={handlePrint}
-            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
+            className="px-4 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
           >
             <Printer className="w-3.5 h-3.5" />
-            <span>Imprimir Relatório</span>
+            <span>Imprimir</span>
           </button>
 
           <button
@@ -243,6 +257,13 @@ export const ExportReportView: React.FC<ExportReportViewProps> = ({
         </div>
 
       </div>
+
+      <PdfExportModal
+        isOpen={isPdfModalOpen}
+        onClose={() => setIsPdfModalOpen(false)}
+        analyticsData={analyticsData}
+        getChartTypeForQuestion={getChartTypeForQuestion}
+      />
 
     </div>
   );
