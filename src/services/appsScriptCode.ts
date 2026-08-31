@@ -33,7 +33,8 @@ var SHEETS = {
   LOGS: 'Logs',
   USERS: 'Users',
   SESSIONS: 'Sessions',
-  AI_ANALYSIS: 'AIAnalysis'
+  AI_ANALYSIS: 'AIAnalysis',
+  PHOTO_BATCHES: 'PhotoBatches'
 };
 
 // Nome da pasta no Google Drive onde as fotos enviadas como resposta são armazenadas
@@ -115,6 +116,10 @@ function initDatabase() {
     {
       name: SHEETS.AI_ANALYSIS,
       headers: ['id', 'survey_id', 'question_id', 'respostas_count', 'resumo', 'positivo', 'neutro', 'negativo', 'pontos_positivos', 'pontos_negativos', 'atualizado_em']
+    },
+    {
+      name: SHEETS.PHOTO_BATCHES,
+      headers: ['id', 'user_id', 'titulo', 'fotos', 'transcricoes', 'resumo', 'positivo', 'neutro', 'negativo', 'pontos_positivos', 'pontos_negativos', 'criado_em', 'atualizado_em']
     }
   ];
 
@@ -595,6 +600,11 @@ function doGet(e) {
         responseData = { status: 'ok', success: true, data: getAppSettingsMap() };
         break;
 
+      case 'listarAnalisesFotos':
+        var listaAnalisesFotos = listarAnalisesFotos(e.parameter && e.parameter.token);
+        responseData = { status: 'ok', success: true, data: listaAnalisesFotos };
+        break;
+
       default:
         // Se a ação não for reconhecida, retorna todos os dados por padrão em vez de erro
         var defaultData = getAllDatabaseData();
@@ -732,6 +742,16 @@ function doPost(e) {
       case 'saveAppSettings':
         var savedSettings = saveAppSettings(postData.token, postData.logoUrl, postData.nomeExibicao);
         responseData = { status: 'ok', success: true, data: savedSettings };
+        break;
+
+      case 'criarAnaliseFotos':
+        var photoBatchResult = criarAnalisePorFotos(postData.token, postData.titulo, postData.fotos);
+        responseData = { status: 'ok', success: true, data: photoBatchResult };
+        break;
+
+      case 'excluirAnaliseFotos':
+        var deletePhotoBatchResult = excluirAnaliseFotos(postData.token, postData.id);
+        responseData = { status: 'ok', success: true, data: deletePhotoBatchResult };
         break;
 
       default:
@@ -995,6 +1015,229 @@ function callGeminiForSentiment(questionTitle, textos) {
   }
 
   return {
+    resumo: resultJson.resumo || '',
+    positivo: Number(resultJson.positivo) || 0,
+    neutro: Number(resultJson.neutro) || 0,
+    negativo: Number(resultJson.negativo) || 0,
+    pontosPositivos: Array.isArray(resultJson.pontosPositivos) ? resultJson.pontosPositivos : [],
+    pontosNegativos: Array.isArray(resultJson.pontosNegativos) ? resultJson.pontosNegativos : []
+  };
+}
+
+// ==========================================
+// ANÁLISE DE SENTIMENTO A PARTIR DE FOTOS (RESPOSTAS EM PAPEL)
+// ==========================================
+
+/**
+ * Recebe um lote de fotos (ex: respostas em papel fotografadas), salva cada uma no Drive
+ * (para poder exibir depois) e pede para o Gemini ler o texto/letra de cada foto e já
+ * devolver a transcrição de cada uma + a análise de sentimento agregada do lote inteiro.
+ * Faz UMA única chamada de IA para o lote todo, para economizar a cota gratuita.
+ */
+function criarAnalisePorFotos(token, titulo, fotos) {
+  var userRaw = getUserFromToken(token);
+  if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
+  if (!titulo || !String(titulo).trim()) throw new Error('Dê um título para identificar esta análise.');
+  if (!fotos || fotos.length === 0) throw new Error('Envie pelo menos uma foto para analisar.');
+  if (fotos.length > 40) throw new Error('Envie no máximo 40 fotos por análise (para manter a IA dentro da cota gratuita).');
+
+  // 1. Salvar cada foto no Drive (para exibição/conferência posterior)
+  var fotoUrls = fotos.map(function(f) {
+    return uploadPhotoToDrive(f.base64, f.mimeType || 'image/jpeg', 'analise-fotos').url;
+  });
+
+  // 2. Pedir para o Gemini ler e analisar todas de uma vez
+  var geminiResult = callGeminiForPhotoSentiment(titulo, fotos);
+
+  // Garantir que sempre haja uma transcrição por foto, mesmo que a IA erre a contagem
+  var transcricoes = fotos.map(function(f, i) {
+    return (geminiResult.transcricoes && geminiResult.transcricoes[i]) || '(não foi possível ler o texto desta foto)';
+  });
+
+  var batchId = 'foto_lote_' + Utilities.getUuid().substring(0, 8);
+  var nowIso = new Date().toISOString();
+
+  var row = {
+    id: batchId,
+    user_id: userRaw.id,
+    titulo: String(titulo).trim(),
+    fotos: JSON.stringify(fotoUrls),
+    transcricoes: JSON.stringify(transcricoes),
+    resumo: geminiResult.resumo,
+    positivo: geminiResult.positivo,
+    neutro: geminiResult.neutro,
+    negativo: geminiResult.negativo,
+    pontos_positivos: JSON.stringify(geminiResult.pontosPositivos || []),
+    pontos_negativos: JSON.stringify(geminiResult.pontosNegativos || []),
+    criado_em: nowIso,
+    atualizado_em: nowIso
+  };
+
+  var sheet = getOrCreateSheet(SHEETS.PHOTO_BATCHES);
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  sheet.appendRow(headers.map(function(h) { return row[h] !== undefined ? row[h] : ''; }));
+
+  logOperation('AI_PHOTO_SENTIMENT', 'Análise de fotos criada: "' + row.titulo + '" (' + fotos.length + ' fotos)', 'SUCCESS');
+
+  return formatPhotoBatchRow(row);
+}
+
+function formatPhotoBatchRow(row) {
+  var fotos = [];
+  var transcricoes = [];
+  var pontosPositivos = [];
+  var pontosNegativos = [];
+  try { fotos = JSON.parse(row.fotos || '[]'); } catch (e) { fotos = []; }
+  try { transcricoes = JSON.parse(row.transcricoes || '[]'); } catch (e) { transcricoes = []; }
+  try { pontosPositivos = JSON.parse(row.pontos_positivos || '[]'); } catch (e) { pontosPositivos = []; }
+  try { pontosNegativos = JSON.parse(row.pontos_negativos || '[]'); } catch (e) { pontosNegativos = []; }
+
+  return {
+    id: row.id,
+    titulo: row.titulo || '',
+    fotos: fotos,
+    transcricoes: transcricoes,
+    resumo: row.resumo || '',
+    positivo: Number(row.positivo) || 0,
+    neutro: Number(row.neutro) || 0,
+    negativo: Number(row.negativo) || 0,
+    pontosPositivos: pontosPositivos,
+    pontosNegativos: pontosNegativos,
+    criadoEm: row.criado_em || '',
+    atualizadoEm: row.atualizado_em || ''
+  };
+}
+
+/**
+ * Lista as análises de fotos já feitas. Usuários comuns só veem as próprias; ADM vê todas.
+ */
+function listarAnalisesFotos(token) {
+  var userRaw = getUserFromToken(token);
+  if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
+
+  var rows = getRowsAsObjects(getOrCreateSheet(SHEETS.PHOTO_BATCHES));
+  var visibleRows = String(userRaw.role) === 'admin'
+    ? rows
+    : rows.filter(function(r) { return String(r.user_id) === String(userRaw.id); });
+
+  return visibleRows
+    .map(formatPhotoBatchRow)
+    .sort(function(a, b) { return (b.criadoEm || '').localeCompare(a.criadoEm || ''); });
+}
+
+/**
+ * Exclui uma análise de fotos (apenas quem criou ou o ADM podem excluir).
+ */
+function excluirAnaliseFotos(token, batchId) {
+  var userRaw = getUserFromToken(token);
+  if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
+
+  var sheet = getOrCreateSheet(SHEETS.PHOTO_BATCHES);
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var idCol = headers.indexOf('id');
+  var userCol = headers.indexOf('user_id');
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idCol]) === String(batchId)) {
+      if (String(userRaw.role) !== 'admin' && String(data[i][userCol]) !== String(userRaw.id)) {
+        throw new Error('Acesso negado: esta análise pertence a outro usuário.');
+      }
+      sheet.deleteRow(i + 1);
+      return { success: true };
+    }
+  }
+  throw new Error('Análise não encontrada.');
+}
+
+/**
+ * Chama o Gemini com todas as fotos do lote de uma vez (multimodal: texto + imagens),
+ * pedindo a transcrição de cada foto e a análise de sentimento agregada.
+ */
+function callGeminiForPhotoSentiment(titulo, fotos) {
+  var apiKey = getGeminiApiKey();
+
+  var parts = [];
+  parts.push({
+    text: 'Você é um analista de pesquisas de clima organizacional. As imagens a seguir são fotos de respostas ' +
+      'em papel (escritas à mão ou impressas) dadas por colaboradores para a pergunta/tema: "' + titulo + '".\n' +
+      'Há ao todo ' + fotos.length + ' fotos, uma por colaborador, na ordem em que aparecem abaixo (Foto 1, Foto 2, ...).'
+  });
+
+  fotos.forEach(function(foto, i) {
+    parts.push({ text: 'Foto ' + (i + 1) + ':' });
+    parts.push({ inlineData: { mimeType: foto.mimeType || 'image/jpeg', data: foto.base64 } });
+  });
+
+  parts.push({
+    text: 'Leia o texto de cada foto (mesmo que a letra seja manuscrita) e responda SOMENTE com um JSON válido, ' +
+      'sem nenhum texto antes ou depois, no formato exato abaixo:\n' +
+      '{"transcricoes": ["o texto que você leu na Foto 1", "o texto que você leu na Foto 2", ' +
+      '"... exatamente ' + fotos.length + ' itens, um por foto, na mesma ordem"], ' +
+      '"resumo": "um parágrafo curto em português resumindo o clima geral de todas as respostas", ' +
+      '"positivo": numero_inteiro_percentual_0_a_100, ' +
+      '"neutro": numero_inteiro_percentual_0_a_100, ' +
+      '"negativo": numero_inteiro_percentual_0_a_100, ' +
+      '"pontosPositivos": ["até 5 frases curtas com os principais elogios/pontos fortes citados"], ' +
+      '"pontosNegativos": ["até 5 frases curtas com as principais críticas/pontos de atenção citados"]}\n' +
+      'Se não conseguir ler alguma foto com clareza, coloque nela o texto "(não foi possível ler esta foto com clareza)". ' +
+      'Os três percentuais (positivo, neutro, negativo) devem somar exatamente 100.'
+  });
+
+  var payload = {
+    contents: [{ parts: parts }],
+    generationConfig: {
+      temperature: 0.2,
+      responseMimeType: 'application/json'
+    }
+  };
+
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + apiKey;
+
+  var response = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+
+  var statusCode = response.getResponseCode();
+  var responseText = response.getContentText();
+
+  if (statusCode !== 200) {
+    logOperation('AI_ERROR', 'Gemini (fotos) retornou ' + statusCode + ': ' + responseText, 'ERROR');
+    throw new Error('A IA não conseguiu processar as fotos agora (código ' + statusCode + '). Tente novamente em alguns instantes — pode ser um limite temporário da cota gratuita, ou o lote de fotos é grande demais para uma única chamada.');
+  }
+
+  var parsedResponse;
+  try {
+    parsedResponse = JSON.parse(responseText);
+  } catch (e) {
+    throw new Error('A IA retornou uma resposta inesperada. Tente novamente.');
+  }
+
+  var textContent = parsedResponse.candidates && parsedResponse.candidates[0] &&
+    parsedResponse.candidates[0].content && parsedResponse.candidates[0].content.parts &&
+    parsedResponse.candidates[0].content.parts[0] && parsedResponse.candidates[0].content.parts[0].text;
+
+  if (!textContent) {
+    throw new Error('A IA não retornou nenhum resultado. Tente novamente.');
+  }
+
+  var resultJson;
+  try {
+    resultJson = JSON.parse(textContent);
+  } catch (e) {
+    var match = textContent.match(/\{[\s\S]*\}/);
+    if (match) {
+      resultJson = JSON.parse(match[0]);
+    } else {
+      throw new Error('Não foi possível interpretar o resultado da IA. Tente novamente.');
+    }
+  }
+
+  return {
+    transcricoes: Array.isArray(resultJson.transcricoes) ? resultJson.transcricoes : [],
     resumo: resultJson.resumo || '',
     positivo: Number(resultJson.positivo) || 0,
     neutro: Number(resultJson.neutro) || 0,
