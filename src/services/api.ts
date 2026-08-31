@@ -1466,7 +1466,9 @@ export class ApiService {
 
   // ==========================================
   // EXPORTAÇÃO CSV DE DADOS REAIS
-  // ==========================================  public static exportToCSV(surveyId: string): string {
+  // ==========================================
+
+  public static exportToCSV(surveyId: string): string {
     const survey = this.surveys.find((s) => s.id === surveyId);
     if (!survey) return '';
 
