@@ -213,6 +213,21 @@ export interface AppSettings {
   nomeExibicao: string;
 }
 
+export interface PhotoBatchAnalysis {
+  id: string;
+  titulo: string;
+  fotos: string[];
+  transcricoes: string[];
+  resumo: string;
+  positivo: number;
+  neutro: number;
+  negativo: number;
+  pontosPositivos: string[];
+  pontosNegativos: string[];
+  criadoEm: string;
+  atualizadoEm: string;
+}
+
 export interface DrillDownTarget {
   type: 'question_option' | 'crosstab_cell' | 'satisfaction_group';
   surveyTitle: string;
