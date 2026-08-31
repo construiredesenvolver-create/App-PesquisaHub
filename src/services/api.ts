@@ -7,7 +7,8 @@ import {
   SurveyStatus,
   GoogleAppsScriptConfig,
   SentimentAnalysisResult,
-  AppSettings
+  AppSettings,
+  PhotoBatchAnalysis
 } from '../types';
 import { DEFAULT_GAS_WEB_APP_URL, GAS_STORAGE_KEY } from './config';
 import { AuthService } from './authService';
@@ -1395,9 +1396,77 @@ export class ApiService {
   }
 
   // ==========================================
-  // EXPORTAÇÃO CSV DE DADOS REAIS
+  // ANÁLISE DE FOTOS EM LOTE (RESPOSTAS EM PAPEL FOTOGRAFADAS)
   // ==========================================
-  public static exportToCSV(surveyId: string): string {
+
+  /**
+   * Envia um lote de fotos (já comprimidas, em base64) para a IA ler o texto de cada uma
+   * e gerar a análise de sentimento agregada. Não depende de nenhuma pesquisa existente.
+   */
+  public static async createPhotoBatchAnalysis(
+    titulo: string,
+    fotos: { base64: string; mimeType: string }[]
+  ): Promise<PhotoBatchAnalysis> {
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) throw new Error('Google Apps Script não configurado.');
+    const token = AuthService.getToken();
+    if (!token) throw new Error('Você não está logado.');
+
+    const response = await fetch(config.webAppUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'criarAnaliseFotos', token, titulo, fotos })
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status} ao analisar as fotos.`);
+    const result = await response.json();
+    if (result.status !== 'ok' && result.success !== true) {
+      throw new Error(result.message || 'Não foi possível concluir a análise das fotos.');
+    }
+    return result.data as PhotoBatchAnalysis;
+  }
+
+  /**
+   * Lista as análises de fotos já feitas (próprias, ou todas se for ADM).
+   */
+  public static async listPhotoBatchAnalyses(): Promise<PhotoBatchAnalysis[]> {
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) return [];
+    const token = AuthService.getToken();
+    if (!token) return [];
+
+    const url = `${config.webAppUrl}?action=listarAnalisesFotos&token=${encodeURIComponent(token)}&_t=${Date.now()}`;
+    const response = await fetch(url);
+    if (!response.ok) return [];
+    const result = await response.json();
+    if ((result.status === 'ok' || result.success) && Array.isArray(result.data)) {
+      return result.data as PhotoBatchAnalysis[];
+    }
+    return [];
+  }
+
+  public static async deletePhotoBatchAnalysis(id: string): Promise<void> {
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) throw new Error('Google Apps Script não configurado.');
+    const token = AuthService.getToken();
+    if (!token) throw new Error('Você não está logado.');
+
+    const response = await fetch(config.webAppUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'excluirAnaliseFotos', token, id })
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status} ao excluir a análise.`);
+    const result = await response.json();
+    if (result.status !== 'ok' && result.success !== true) {
+      throw new Error(result.message || 'Não foi possível excluir a análise.');
+    }
+  }
+
+  // ==========================================
+  // EXPORTAÇÃO CSV DE DADOS REAIS
+  // ==========================================  public static exportToCSV(surveyId: string): string {
     const survey = this.surveys.find((s) => s.id === surveyId);
     if (!survey) return '';
 
