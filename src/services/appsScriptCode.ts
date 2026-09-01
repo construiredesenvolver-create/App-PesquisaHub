@@ -54,10 +54,11 @@ var SESSION_DURATION_HOURS = 24;
 /**
  * FUNÇÃO DE AUTORIZAÇÃO — execute-a UMA VEZ manualmente pelo editor do Apps Script
  * (selecione "autorizarPermissoes" no menu de funções e clique em "Executar").
- * Isso força o Google a pedir sua aprovação para usar o Google Drive (fotos/logo)
- * e o Gmail (e-mails de novo usuário/redefinição de senha). Sem rodar isso uma vez
- * manualmente, o app da web sozinho não consegue pedir essa permissão, e as fotos
- * e os e-mails falham com "Exception: Você não tem permissão para chamar...".
+ * Isso força o Google a pedir sua aprovação para usar o Google Drive (fotos/logo),
+ * o Gmail (e-mails de novo usuário/redefinição de senha) e chamadas externas
+ * (necessário para conversar com a IA do Gemini). Sem rodar isso uma vez
+ * manualmente, o app da web sozinho não consegue pedir essa permissão, e as fotos,
+ * e-mails ou análises de IA falham com "Exception: Você não tem permissão para chamar...".
  */
 function autorizarPermissoes() {
   // Testa exatamente as mesmas ações usadas no upload real de fotos/logo,
@@ -69,6 +70,9 @@ function autorizarPermissoes() {
   testFolder.setTrashed(true);
 
   MailApp.getRemainingDailyQuota();
+
+  // Testa uma chamada externa (mesmo tipo usado para falar com a IA do Gemini)
+  UrlFetchApp.fetch('https://www.google.com', { muteHttpExceptions: true });
 
   Logger.log('Permissões concedidas com sucesso!');
 }
@@ -119,7 +123,7 @@ function initDatabase() {
     },
     {
       name: SHEETS.PHOTO_BATCHES,
-      headers: ['id', 'user_id', 'titulo', 'fotos', 'transcricoes', 'resumo', 'positivo', 'neutro', 'negativo', 'pontos_positivos', 'pontos_negativos', 'criado_em', 'atualizado_em']
+      headers: ['id', 'user_id', 'titulo', 'entradas', 'perguntas', 'setores', 'resumo_geral', 'positivo_geral', 'neutro_geral', 'negativo_geral', 'pontos_positivos_gerais', 'pontos_negativos_gerais', 'criado_em', 'atualizado_em']
     }
   ];
 
@@ -745,7 +749,7 @@ function doPost(e) {
         break;
 
       case 'criarAnaliseFotos':
-        var photoBatchResult = criarAnalisePorFotos(postData.token, postData.titulo, postData.fotos);
+        var photoBatchResult = criarAnalisePorFotos(postData.token, postData.titulo, postData.entradas);
         responseData = { status: 'ok', success: true, data: photoBatchResult };
         break;
 
@@ -1029,30 +1033,57 @@ function callGeminiForSentiment(questionTitle, textos) {
 // ==========================================
 
 /**
- * Recebe um lote de fotos (ex: respostas em papel fotografadas), salva cada uma no Drive
- * (para poder exibir depois) e pede para o Gemini ler o texto/letra de cada foto e já
- * devolver a transcrição de cada uma + a análise de sentimento agregada do lote inteiro.
- * Faz UMA única chamada de IA para o lote todo, para economizar a cota gratuita.
+ * Recebe um lote de entradas (nome do colaborador + setor opcional + foto da resposta em
+ * papel), salva cada foto no Drive e pede para o Gemini, em UMA única chamada:
+ *   1) transcrever o texto de cada foto;
+ *   2) classificar o sentimento individual de cada resposta;
+ *   3) identificar automaticamente se as respostas cobrem uma ou várias perguntas/temas
+ *      diferentes, agrupando cada entrada na pergunta correspondente.
+ * A partir disso, o próprio Apps Script calcula (sem gastar mais cota de IA) as visões
+ * agregadas: geral (macro), por pergunta identificada, por setor e por colaborador (micro).
  */
-function criarAnalisePorFotos(token, titulo, fotos) {
+function criarAnalisePorFotos(token, titulo, entradas) {
   var userRaw = getUserFromToken(token);
   if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
   if (!titulo || !String(titulo).trim()) throw new Error('Dê um título para identificar esta análise.');
-  if (!fotos || fotos.length === 0) throw new Error('Envie pelo menos uma foto para analisar.');
-  if (fotos.length > 40) throw new Error('Envie no máximo 40 fotos por análise (para manter a IA dentro da cota gratuita).');
+  if (!entradas || entradas.length === 0) throw new Error('Adicione pelo menos um colaborador com foto para analisar.');
+  if (entradas.length > 40) throw new Error('Envie no máximo 40 colaboradores por análise (para manter a IA dentro da cota gratuita).');
+
+  entradas.forEach(function(en, i) {
+    if (!en.nome || !String(en.nome).trim()) throw new Error('O colaborador da posição ' + (i + 1) + ' está sem nome.');
+    if (!en.base64) throw new Error('O colaborador "' + en.nome + '" está sem foto.');
+  });
 
   // 1. Salvar cada foto no Drive (para exibição/conferência posterior)
-  var fotoUrls = fotos.map(function(f) {
-    return uploadPhotoToDrive(f.base64, f.mimeType || 'image/jpeg', 'analise-fotos').url;
+  var fotoUrls = entradas.map(function(en) {
+    return uploadPhotoToDrive(en.base64, en.mimeType || 'image/jpeg', 'analise-fotos').url;
   });
 
-  // 2. Pedir para o Gemini ler e analisar todas de uma vez
-  var geminiResult = callGeminiForPhotoSentiment(titulo, fotos);
+  // 2. Pedir para o Gemini ler, classificar e agrupar por pergunta — tudo em uma chamada
+  var geminiResult = callGeminiForPhotoSentiment(titulo, entradas);
 
-  // Garantir que sempre haja uma transcrição por foto, mesmo que a IA erre a contagem
-  var transcricoes = fotos.map(function(f, i) {
-    return (geminiResult.transcricoes && geminiResult.transcricoes[i]) || '(não foi possível ler o texto desta foto)';
+  // 3. Montar as entradas finais (dados do formulário + o que a IA leu/classificou)
+  var perguntasTitulos = (geminiResult.perguntas || []).map(function(p) { return p.titulo || 'Pergunta'; });
+  if (perguntasTitulos.length === 0) perguntasTitulos = [titulo];
+
+  var entradasFinais = entradas.map(function(en, i) {
+    var ia = geminiResult.entradas && geminiResult.entradas[i] ? geminiResult.entradas[i] : {};
+    var perguntaIndex = (typeof ia.perguntaIndex === 'number' && perguntasTitulos[ia.perguntaIndex] !== undefined) ? ia.perguntaIndex : 0;
+    var sentimento = ['positivo', 'neutro', 'negativo'].indexOf(ia.sentimento) !== -1 ? ia.sentimento : 'neutro';
+    return {
+      nome: String(en.nome).trim(),
+      setor: en.setor ? String(en.setor).trim() : '',
+      url: fotoUrls[i],
+      transcricao: ia.transcricao || '(não foi possível ler o texto desta foto)',
+      sentimento: sentimento,
+      perguntaTitulo: perguntasTitulos[perguntaIndex]
+    };
   });
+
+  // 4. Agregações calculadas aqui (contagem real), não confiando em percentuais soltos da IA
+  var perguntasAgregadas = agruparEntradasPor(entradasFinais, function(en) { return en.perguntaTitulo; });
+  var setoresAgregados = agruparEntradasPor(entradasFinais, function(en) { return en.setor || 'Sem setor definido'; });
+  var geral = calcularSentimentoAgregado(entradasFinais);
 
   var batchId = 'foto_lote_' + Utilities.getUuid().substring(0, 8);
   var nowIso = new Date().toISOString();
@@ -1061,14 +1092,15 @@ function criarAnalisePorFotos(token, titulo, fotos) {
     id: batchId,
     user_id: userRaw.id,
     titulo: String(titulo).trim(),
-    fotos: JSON.stringify(fotoUrls),
-    transcricoes: JSON.stringify(transcricoes),
-    resumo: geminiResult.resumo,
-    positivo: geminiResult.positivo,
-    neutro: geminiResult.neutro,
-    negativo: geminiResult.negativo,
-    pontos_positivos: JSON.stringify(geminiResult.pontosPositivos || []),
-    pontos_negativos: JSON.stringify(geminiResult.pontosNegativos || []),
+    entradas: JSON.stringify(entradasFinais),
+    perguntas: JSON.stringify(perguntasAgregadas),
+    setores: JSON.stringify(setoresAgregados),
+    resumo_geral: geminiResult.resumoGeral || '',
+    positivo_geral: geral.positivo,
+    neutro_geral: geral.neutro,
+    negativo_geral: geral.negativo,
+    pontos_positivos_gerais: JSON.stringify(geminiResult.pontosPositivosGerais || []),
+    pontos_negativos_gerais: JSON.stringify(geminiResult.pontosNegativosGerais || []),
     criado_em: nowIso,
     atualizado_em: nowIso
   };
@@ -1077,32 +1109,79 @@ function criarAnalisePorFotos(token, titulo, fotos) {
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   sheet.appendRow(headers.map(function(h) { return row[h] !== undefined ? row[h] : ''; }));
 
-  logOperation('AI_PHOTO_SENTIMENT', 'Análise de fotos criada: "' + row.titulo + '" (' + fotos.length + ' fotos)', 'SUCCESS');
+  logOperation('AI_PHOTO_SENTIMENT', 'Análise de fotos criada: "' + row.titulo + '" (' + entradas.length + ' colaboradores, ' + perguntasAgregadas.length + ' pergunta(s) detectada(s))', 'SUCCESS');
 
   return formatPhotoBatchRow(row);
 }
 
+/**
+ * Agrupa as entradas finais por uma chave (pergunta ou setor) e calcula o sentimento
+ * agregado real de cada grupo, com a lista de colaboradores que compõem o grupo.
+ */
+function agruparEntradasPor(entradasFinais, chaveFn) {
+  var grupos = {};
+  var ordem = [];
+
+  entradasFinais.forEach(function(en) {
+    var chave = chaveFn(en) || 'Não identificado';
+    if (!grupos[chave]) {
+      grupos[chave] = [];
+      ordem.push(chave);
+    }
+    grupos[chave].push(en);
+  });
+
+  return ordem.map(function(chave) {
+    var itens = grupos[chave];
+    var agregado = calcularSentimentoAgregado(itens);
+    return {
+      titulo: chave,
+      totalRespostas: itens.length,
+      positivo: agregado.positivo,
+      neutro: agregado.neutro,
+      negativo: agregado.negativo,
+      colaboradores: itens.map(function(en) { return en.nome; })
+    };
+  });
+}
+
+function calcularSentimentoAgregado(itens) {
+  var total = itens.length || 1;
+  var positivos = itens.filter(function(en) { return en.sentimento === 'positivo'; }).length;
+  var negativos = itens.filter(function(en) { return en.sentimento === 'negativo'; }).length;
+  var neutros = total - positivos - negativos;
+
+  return {
+    positivo: Math.round((positivos / total) * 100),
+    neutro: Math.round((neutros / total) * 100),
+    negativo: Math.round((negativos / total) * 100)
+  };
+}
+
 function formatPhotoBatchRow(row) {
-  var fotos = [];
-  var transcricoes = [];
-  var pontosPositivos = [];
-  var pontosNegativos = [];
-  try { fotos = JSON.parse(row.fotos || '[]'); } catch (e) { fotos = []; }
-  try { transcricoes = JSON.parse(row.transcricoes || '[]'); } catch (e) { transcricoes = []; }
-  try { pontosPositivos = JSON.parse(row.pontos_positivos || '[]'); } catch (e) { pontosPositivos = []; }
-  try { pontosNegativos = JSON.parse(row.pontos_negativos || '[]'); } catch (e) { pontosNegativos = []; }
+  var entradas = [];
+  var perguntas = [];
+  var setores = [];
+  var pontosPositivosGerais = [];
+  var pontosNegativosGerais = [];
+  try { entradas = JSON.parse(row.entradas || '[]'); } catch (e) { entradas = []; }
+  try { perguntas = JSON.parse(row.perguntas || '[]'); } catch (e) { perguntas = []; }
+  try { setores = JSON.parse(row.setores || '[]'); } catch (e) { setores = []; }
+  try { pontosPositivosGerais = JSON.parse(row.pontos_positivos_gerais || '[]'); } catch (e) { pontosPositivosGerais = []; }
+  try { pontosNegativosGerais = JSON.parse(row.pontos_negativos_gerais || '[]'); } catch (e) { pontosNegativosGerais = []; }
 
   return {
     id: row.id,
     titulo: row.titulo || '',
-    fotos: fotos,
-    transcricoes: transcricoes,
-    resumo: row.resumo || '',
-    positivo: Number(row.positivo) || 0,
-    neutro: Number(row.neutro) || 0,
-    negativo: Number(row.negativo) || 0,
-    pontosPositivos: pontosPositivos,
-    pontosNegativos: pontosNegativos,
+    entradas: entradas,
+    perguntas: perguntas,
+    setores: setores,
+    resumoGeral: row.resumo_geral || '',
+    positivoGeral: Number(row.positivo_geral) || 0,
+    neutroGeral: Number(row.neutro_geral) || 0,
+    negativoGeral: Number(row.negativo_geral) || 0,
+    pontosPositivosGerais: pontosPositivosGerais,
+    pontosNegativosGerais: pontosNegativosGerais,
     criadoEm: row.criado_em || '',
     atualizadoEm: row.atualizado_em || ''
   };
@@ -1152,36 +1231,40 @@ function excluirAnaliseFotos(token, batchId) {
 
 /**
  * Chama o Gemini com todas as fotos do lote de uma vez (multimodal: texto + imagens),
- * pedindo a transcrição de cada foto e a análise de sentimento agregada.
+ * pedindo a transcrição, o sentimento individual de cada uma, a detecção automática de
+ * quantas perguntas/temas distintos existem entre as respostas, e o resumo geral do lote.
  */
-function callGeminiForPhotoSentiment(titulo, fotos) {
+function callGeminiForPhotoSentiment(titulo, entradas) {
   var apiKey = getGeminiApiKey();
 
   var parts = [];
   parts.push({
     text: 'Você é um analista de pesquisas de clima organizacional. As imagens a seguir são fotos de respostas ' +
-      'em papel (escritas à mão ou impressas) dadas por colaboradores para a pergunta/tema: "' + titulo + '".\n' +
-      'Há ao todo ' + fotos.length + ' fotos, uma por colaborador, na ordem em que aparecem abaixo (Foto 1, Foto 2, ...).'
+      'em papel (escritas à mão ou impressas), uma por colaborador, coletadas sob o tema/título: "' + titulo + '".\n' +
+      'Há ao todo ' + entradas.length + ' fotos, na ordem em que aparecem abaixo (Foto 1, Foto 2, ...). ' +
+      'IMPORTANTE: essas fotos podem conter respostas para UMA ÚNICA pergunta, ou para VÁRIAS perguntas/temas ' +
+      'diferentes misturadas no mesmo lote. Você deve identificar isso sozinho, agrupando as respostas.'
   });
 
-  fotos.forEach(function(foto, i) {
-    parts.push({ text: 'Foto ' + (i + 1) + ':' });
-    parts.push({ inlineData: { mimeType: foto.mimeType || 'image/jpeg', data: foto.base64 } });
+  entradas.forEach(function(en, i) {
+    parts.push({ text: 'Foto ' + (i + 1) + ' (colaborador: ' + String(en.nome).trim() + '):' });
+    parts.push({ inlineData: { mimeType: en.mimeType || 'image/jpeg', data: en.base64 } });
   });
 
   parts.push({
     text: 'Leia o texto de cada foto (mesmo que a letra seja manuscrita) e responda SOMENTE com um JSON válido, ' +
       'sem nenhum texto antes ou depois, no formato exato abaixo:\n' +
-      '{"transcricoes": ["o texto que você leu na Foto 1", "o texto que você leu na Foto 2", ' +
-      '"... exatamente ' + fotos.length + ' itens, um por foto, na mesma ordem"], ' +
-      '"resumo": "um parágrafo curto em português resumindo o clima geral de todas as respostas", ' +
-      '"positivo": numero_inteiro_percentual_0_a_100, ' +
-      '"neutro": numero_inteiro_percentual_0_a_100, ' +
-      '"negativo": numero_inteiro_percentual_0_a_100, ' +
-      '"pontosPositivos": ["até 5 frases curtas com os principais elogios/pontos fortes citados"], ' +
-      '"pontosNegativos": ["até 5 frases curtas com as principais críticas/pontos de atenção citados"]}\n' +
-      'Se não conseguir ler alguma foto com clareza, coloque nela o texto "(não foi possível ler esta foto com clareza)". ' +
-      'Os três percentuais (positivo, neutro, negativo) devem somar exatamente 100.'
+      '{"perguntas": [{"titulo": "um título curto resumindo a pergunta/tema identificado nº1"}, ' +
+      '{"titulo": "pergunta/tema nº2, se houver outra diferente da primeira"}], ' +
+      '"entradas": [{"transcricao": "texto lido na Foto 1", "sentimento": "positivo|neutro|negativo", ' +
+      '"perguntaIndex": indice_da_pergunta_no_array_perguntas_acima_0_baseado}, ' +
+      '"... exatamente ' + entradas.length + ' itens, um por foto, na mesma ordem"], ' +
+      '"resumoGeral": "um parágrafo curto em português resumindo o clima geral de TODAS as respostas juntas", ' +
+      '"pontosPositivosGerais": ["até 5 frases curtas com os principais elogios/pontos fortes do lote inteiro"], ' +
+      '"pontosNegativosGerais": ["até 5 frases curtas com as principais críticas/pontos de atenção do lote inteiro"]}\n' +
+      'Regras: se todas as respostas forem sobre o mesmo tema, o array "perguntas" deve ter só 1 item, e todo mundo ' +
+      'aponta para perguntaIndex 0. Se não conseguir ler alguma foto com clareza, use "(não foi possível ler esta ' +
+      'foto com clareza)" como transcrição e classifique o sentimento dela como "neutro".'
   });
 
   var payload = {
@@ -1237,13 +1320,11 @@ function callGeminiForPhotoSentiment(titulo, fotos) {
   }
 
   return {
-    transcricoes: Array.isArray(resultJson.transcricoes) ? resultJson.transcricoes : [],
-    resumo: resultJson.resumo || '',
-    positivo: Number(resultJson.positivo) || 0,
-    neutro: Number(resultJson.neutro) || 0,
-    negativo: Number(resultJson.negativo) || 0,
-    pontosPositivos: Array.isArray(resultJson.pontosPositivos) ? resultJson.pontosPositivos : [],
-    pontosNegativos: Array.isArray(resultJson.pontosNegativos) ? resultJson.pontosNegativos : []
+    perguntas: Array.isArray(resultJson.perguntas) ? resultJson.perguntas : [],
+    entradas: Array.isArray(resultJson.entradas) ? resultJson.entradas : [],
+    resumoGeral: resultJson.resumoGeral || '',
+    pontosPositivosGerais: Array.isArray(resultJson.pontosPositivosGerais) ? resultJson.pontosPositivosGerais : [],
+    pontosNegativosGerais: Array.isArray(resultJson.pontosNegativosGerais) ? resultJson.pontosNegativosGerais : []
   };
 }
 
