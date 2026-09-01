@@ -1400,12 +1400,14 @@ export class ApiService {
   // ==========================================
 
   /**
-   * Envia um lote de fotos (já comprimidas, em base64) para a IA ler o texto de cada uma
-   * e gerar a análise de sentimento agregada. Não depende de nenhuma pesquisa existente.
+   * Envia um lote de entradas (nome do colaborador + setor opcional + foto já comprimida em
+   * base64) para a IA ler o texto de cada uma, identificar as perguntas automaticamente e
+   * gerar a análise de sentimento agregada (geral, por pergunta, por setor e por colaborador).
+   * Não depende de nenhuma pesquisa existente.
    */
   public static async createPhotoBatchAnalysis(
     titulo: string,
-    fotos: { base64: string; mimeType: string }[]
+    entradas: { nome: string; setor: string; base64: string; mimeType: string }[]
   ): Promise<PhotoBatchAnalysis> {
     const config = this.getGasConfig();
     if (!config.webAppUrl) throw new Error('Google Apps Script não configurado.');
@@ -1415,7 +1417,7 @@ export class ApiService {
     const response = await fetch(config.webAppUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action: 'criarAnaliseFotos', token, titulo, fotos })
+      body: JSON.stringify({ action: 'criarAnaliseFotos', token, titulo, entradas })
     });
 
     if (!response.ok) throw new Error(`HTTP ${response.status} ao analisar as fotos.`);
