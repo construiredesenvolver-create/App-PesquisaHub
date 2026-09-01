@@ -213,17 +213,36 @@ export interface AppSettings {
   nomeExibicao: string;
 }
 
-export interface PhotoBatchAnalysis {
-  id: string;
+export interface PhotoBatchEntry {
+  nome: string;
+  setor: string;
+  url: string;
+  transcricao: string;
+  sentimento: 'positivo' | 'neutro' | 'negativo';
+  perguntaTitulo: string;
+}
+
+export interface PhotoBatchGroupStats {
   titulo: string;
-  fotos: string[];
-  transcricoes: string[];
-  resumo: string;
+  totalRespostas: number;
   positivo: number;
   neutro: number;
   negativo: number;
-  pontosPositivos: string[];
-  pontosNegativos: string[];
+  colaboradores: string[];
+}
+
+export interface PhotoBatchAnalysis {
+  id: string;
+  titulo: string;
+  entradas: PhotoBatchEntry[];
+  perguntas: PhotoBatchGroupStats[];
+  setores: PhotoBatchGroupStats[];
+  resumoGeral: string;
+  positivoGeral: number;
+  neutroGeral: number;
+  negativoGeral: number;
+  pontosPositivosGerais: string[];
+  pontosNegativosGerais: string[];
   criadoEm: string;
   atualizadoEm: string;
 }
