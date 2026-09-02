@@ -522,7 +522,6 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
                       <option value="multiple_choice">Múltipla Escolha (Checkbox)</option>
                       <option value="text">Texto Livre</option>
                       <option value="rating">Avaliação / Estrelas</option>
-                      <option value="foto">Foto (upload/câmera)</option>
                     </select>
                   </div>
                 </div>
