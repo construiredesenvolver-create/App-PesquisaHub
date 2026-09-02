@@ -10,12 +10,11 @@ import {
   Users,
   LogOut,
   ShieldCheck,
-  User as UserIcon,
-  Camera
+  User as UserIcon
 } from 'lucide-react';
 import { Survey, AppUser } from '../types';
 
-export type NavTab = 'dashboard' | 'surveys' | 'builder' | 'analytics' | 'settings' | 'users' | 'photos';
+export type NavTab = 'dashboard' | 'surveys' | 'builder' | 'analytics' | 'settings' | 'users';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -132,23 +131,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
                 {totalSurveysCount}
               </span>
-            </button>
-
-            <button
-              onClick={() => {
-                onTabChange('photos');
-                onCloseMobile();
-              }}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium transition-colors ${
-                activeTab === 'photos'
-                  ? 'bg-slate-800 text-white font-semibold border-l-2 border-blue-500'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <Camera className="w-4 h-4 text-emerald-400" />
-                <span>Análise de Fotos</span>
-              </div>
             </button>
 
             {/* Active Survey Direct Sub-item if an analytics session is active */}
