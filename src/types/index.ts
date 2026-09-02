@@ -7,8 +7,7 @@ export type QuestionType =
   | 'rating' 
   | 'short_text' 
   | 'long_text'
-  | 'text'
-  | 'foto';
+  | 'text';
 
 export interface SurveySettings {
   exigir_nome: boolean;
@@ -211,40 +210,6 @@ export interface SentimentAnalysisResult {
 export interface AppSettings {
   logoUrl: string;
   nomeExibicao: string;
-}
-
-export interface PhotoBatchEntry {
-  nome: string;
-  setor: string;
-  url: string;
-  transcricao: string;
-  sentimento: 'positivo' | 'neutro' | 'negativo';
-  perguntaTitulo: string;
-}
-
-export interface PhotoBatchGroupStats {
-  titulo: string;
-  totalRespostas: number;
-  positivo: number;
-  neutro: number;
-  negativo: number;
-  colaboradores: string[];
-}
-
-export interface PhotoBatchAnalysis {
-  id: string;
-  titulo: string;
-  entradas: PhotoBatchEntry[];
-  perguntas: PhotoBatchGroupStats[];
-  setores: PhotoBatchGroupStats[];
-  resumoGeral: string;
-  positivoGeral: number;
-  neutroGeral: number;
-  negativoGeral: number;
-  pontosPositivosGerais: string[];
-  pontosNegativosGerais: string[];
-  criadoEm: string;
-  atualizadoEm: string;
 }
 
 export interface DrillDownTarget {
