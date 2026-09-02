@@ -10,7 +10,6 @@ import { PublicSurveyView } from './components/PublicSurveyView';
 import { ShareModal } from './components/ShareModal';
 import { LoginView } from './components/LoginView';
 import { UsersView } from './components/UsersView';
-import { PhotoBatchAnalysisView } from './components/PhotoBatchAnalysisView';
 import { ApiService } from './services/api';
 import { AuthService } from './services/authService';
 import { 
@@ -512,10 +511,6 @@ export function App() {
 
           {effectiveTab === 'users' && currentUser.role === 'admin' && (
             <UsersView />
-          )}
-
-          {effectiveTab === 'photos' && (
-            <PhotoBatchAnalysisView />
           )}
 
           {effectiveTab === 'settings' && (
