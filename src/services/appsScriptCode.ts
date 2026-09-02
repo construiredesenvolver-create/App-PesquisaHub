@@ -33,8 +33,7 @@ var SHEETS = {
   LOGS: 'Logs',
   USERS: 'Users',
   SESSIONS: 'Sessions',
-  AI_ANALYSIS: 'AIAnalysis',
-  PHOTO_BATCHES: 'PhotoBatches'
+  AI_ANALYSIS: 'AIAnalysis'
 };
 
 // Nome da pasta no Google Drive onde as fotos enviadas como resposta são armazenadas
@@ -45,8 +44,8 @@ var GEMINI_MODEL = 'gemini-2.0-flash';
 
 // E-mail do administrador inicial (recebe a conta ADM automaticamente na primeira execução)
 var ADMIN_SEED_EMAIL = 'cristianokuhn7@gmail.com';
-// Duração da sessão de login, em horas
-var SESSION_DURATION_HOURS = 24;
+// Duração da sessão de login, em horas (7 dias — evita pedir login de novo com frequência)
+var SESSION_DURATION_HOURS = 168;
 
 /**
  * Inicializa a estrutura de abas e cabeçalhos na planilha se não existirem.
@@ -120,10 +119,6 @@ function initDatabase() {
     {
       name: SHEETS.AI_ANALYSIS,
       headers: ['id', 'survey_id', 'question_id', 'respostas_count', 'resumo', 'positivo', 'neutro', 'negativo', 'pontos_positivos', 'pontos_negativos', 'atualizado_em']
-    },
-    {
-      name: SHEETS.PHOTO_BATCHES,
-      headers: ['id', 'user_id', 'titulo', 'entradas', 'perguntas', 'setores', 'resumo_geral', 'positivo_geral', 'neutro_geral', 'negativo_geral', 'pontos_positivos_gerais', 'pontos_negativos_gerais', 'criado_em', 'atualizado_em']
     }
   ];
 
@@ -237,6 +232,32 @@ function getUserFromToken(token) {
   if (new Date(session.expira_em).getTime() < Date.now()) return null;
   var userRaw = findUserById(session.user_id);
   if (!userRaw || (userRaw.ativo === false || userRaw.ativo === 'FALSE' || userRaw.ativo === 'false')) return null;
+  return userRaw;
+}
+
+/**
+ * Igual a getUserFromToken, mas lança um erro específico explicando exatamente o motivo
+ * (em vez do genérico "sessão inválida"), para facilitar o diagnóstico caso aconteça de novo.
+ */
+function getUserFromTokenOrThrow(token) {
+  if (!token) {
+    throw new Error('Sua sessão não foi enviada corretamente para o servidor (token ausente). Recarregue a página e faça login novamente.');
+  }
+  var rows = getRowsAsObjects(getOrCreateSheet(SHEETS.SESSIONS));
+  var session = rows.find(function(s) { return s.token === token; });
+  if (!session) {
+    throw new Error('Sua sessão não foi encontrada (pode ter sido encerrada em outro dispositivo). Faça login novamente.');
+  }
+  if (new Date(session.expira_em).getTime() < Date.now()) {
+    throw new Error('Sua sessão expirou. Faça login novamente.');
+  }
+  var userRaw = findUserById(session.user_id);
+  if (!userRaw) {
+    throw new Error('Usuário desta sessão não foi encontrado. Faça login novamente.');
+  }
+  if (userRaw.ativo === false || userRaw.ativo === 'FALSE' || userRaw.ativo === 'false') {
+    throw new Error('Este usuário foi desativado. Fale com o administrador.');
+  }
   return userRaw;
 }
 
@@ -604,11 +625,6 @@ function doGet(e) {
         responseData = { status: 'ok', success: true, data: getAppSettingsMap() };
         break;
 
-      case 'listarAnalisesFotos':
-        var listaAnalisesFotos = listarAnalisesFotos(e.parameter && e.parameter.token);
-        responseData = { status: 'ok', success: true, data: listaAnalisesFotos };
-        break;
-
       default:
         // Se a ação não for reconhecida, retorna todos os dados por padrão em vez de erro
         var defaultData = getAllDatabaseData();
@@ -746,16 +762,6 @@ function doPost(e) {
       case 'saveAppSettings':
         var savedSettings = saveAppSettings(postData.token, postData.logoUrl, postData.nomeExibicao);
         responseData = { status: 'ok', success: true, data: savedSettings };
-        break;
-
-      case 'criarAnaliseFotos':
-        var photoBatchResult = criarAnalisePorFotos(postData.token, postData.titulo, postData.entradas);
-        responseData = { status: 'ok', success: true, data: photoBatchResult };
-        break;
-
-      case 'excluirAnaliseFotos':
-        var deletePhotoBatchResult = excluirAnaliseFotos(postData.token, postData.id);
-        responseData = { status: 'ok', success: true, data: deletePhotoBatchResult };
         break;
 
       default:
@@ -1025,306 +1031,6 @@ function callGeminiForSentiment(questionTitle, textos) {
     negativo: Number(resultJson.negativo) || 0,
     pontosPositivos: Array.isArray(resultJson.pontosPositivos) ? resultJson.pontosPositivos : [],
     pontosNegativos: Array.isArray(resultJson.pontosNegativos) ? resultJson.pontosNegativos : []
-  };
-}
-
-// ==========================================
-// ANÁLISE DE SENTIMENTO A PARTIR DE FOTOS (RESPOSTAS EM PAPEL)
-// ==========================================
-
-/**
- * Recebe um lote de entradas (nome do colaborador + setor opcional + foto da resposta em
- * papel), salva cada foto no Drive e pede para o Gemini, em UMA única chamada:
- *   1) transcrever o texto de cada foto;
- *   2) classificar o sentimento individual de cada resposta;
- *   3) identificar automaticamente se as respostas cobrem uma ou várias perguntas/temas
- *      diferentes, agrupando cada entrada na pergunta correspondente.
- * A partir disso, o próprio Apps Script calcula (sem gastar mais cota de IA) as visões
- * agregadas: geral (macro), por pergunta identificada, por setor e por colaborador (micro).
- */
-function criarAnalisePorFotos(token, titulo, entradas) {
-  var userRaw = getUserFromToken(token);
-  if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
-  if (!titulo || !String(titulo).trim()) throw new Error('Dê um título para identificar esta análise.');
-  if (!entradas || entradas.length === 0) throw new Error('Adicione pelo menos um colaborador com foto para analisar.');
-  if (entradas.length > 40) throw new Error('Envie no máximo 40 colaboradores por análise (para manter a IA dentro da cota gratuita).');
-
-  entradas.forEach(function(en, i) {
-    if (!en.nome || !String(en.nome).trim()) throw new Error('O colaborador da posição ' + (i + 1) + ' está sem nome.');
-    if (!en.base64) throw new Error('O colaborador "' + en.nome + '" está sem foto.');
-  });
-
-  // 1. Salvar cada foto no Drive (para exibição/conferência posterior)
-  var fotoUrls = entradas.map(function(en) {
-    return uploadPhotoToDrive(en.base64, en.mimeType || 'image/jpeg', 'analise-fotos').url;
-  });
-
-  // 2. Pedir para o Gemini ler, classificar e agrupar por pergunta — tudo em uma chamada
-  var geminiResult = callGeminiForPhotoSentiment(titulo, entradas);
-
-  // 3. Montar as entradas finais (dados do formulário + o que a IA leu/classificou)
-  var perguntasTitulos = (geminiResult.perguntas || []).map(function(p) { return p.titulo || 'Pergunta'; });
-  if (perguntasTitulos.length === 0) perguntasTitulos = [titulo];
-
-  var entradasFinais = entradas.map(function(en, i) {
-    var ia = geminiResult.entradas && geminiResult.entradas[i] ? geminiResult.entradas[i] : {};
-    var perguntaIndex = (typeof ia.perguntaIndex === 'number' && perguntasTitulos[ia.perguntaIndex] !== undefined) ? ia.perguntaIndex : 0;
-    var sentimento = ['positivo', 'neutro', 'negativo'].indexOf(ia.sentimento) !== -1 ? ia.sentimento : 'neutro';
-    return {
-      nome: String(en.nome).trim(),
-      setor: en.setor ? String(en.setor).trim() : '',
-      url: fotoUrls[i],
-      transcricao: ia.transcricao || '(não foi possível ler o texto desta foto)',
-      sentimento: sentimento,
-      perguntaTitulo: perguntasTitulos[perguntaIndex]
-    };
-  });
-
-  // 4. Agregações calculadas aqui (contagem real), não confiando em percentuais soltos da IA
-  var perguntasAgregadas = agruparEntradasPor(entradasFinais, function(en) { return en.perguntaTitulo; });
-  var setoresAgregados = agruparEntradasPor(entradasFinais, function(en) { return en.setor || 'Sem setor definido'; });
-  var geral = calcularSentimentoAgregado(entradasFinais);
-
-  var batchId = 'foto_lote_' + Utilities.getUuid().substring(0, 8);
-  var nowIso = new Date().toISOString();
-
-  var row = {
-    id: batchId,
-    user_id: userRaw.id,
-    titulo: String(titulo).trim(),
-    entradas: JSON.stringify(entradasFinais),
-    perguntas: JSON.stringify(perguntasAgregadas),
-    setores: JSON.stringify(setoresAgregados),
-    resumo_geral: geminiResult.resumoGeral || '',
-    positivo_geral: geral.positivo,
-    neutro_geral: geral.neutro,
-    negativo_geral: geral.negativo,
-    pontos_positivos_gerais: JSON.stringify(geminiResult.pontosPositivosGerais || []),
-    pontos_negativos_gerais: JSON.stringify(geminiResult.pontosNegativosGerais || []),
-    criado_em: nowIso,
-    atualizado_em: nowIso
-  };
-
-  var sheet = getOrCreateSheet(SHEETS.PHOTO_BATCHES);
-  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  sheet.appendRow(headers.map(function(h) { return row[h] !== undefined ? row[h] : ''; }));
-
-  logOperation('AI_PHOTO_SENTIMENT', 'Análise de fotos criada: "' + row.titulo + '" (' + entradas.length + ' colaboradores, ' + perguntasAgregadas.length + ' pergunta(s) detectada(s))', 'SUCCESS');
-
-  return formatPhotoBatchRow(row);
-}
-
-/**
- * Agrupa as entradas finais por uma chave (pergunta ou setor) e calcula o sentimento
- * agregado real de cada grupo, com a lista de colaboradores que compõem o grupo.
- */
-function agruparEntradasPor(entradasFinais, chaveFn) {
-  var grupos = {};
-  var ordem = [];
-
-  entradasFinais.forEach(function(en) {
-    var chave = chaveFn(en) || 'Não identificado';
-    if (!grupos[chave]) {
-      grupos[chave] = [];
-      ordem.push(chave);
-    }
-    grupos[chave].push(en);
-  });
-
-  return ordem.map(function(chave) {
-    var itens = grupos[chave];
-    var agregado = calcularSentimentoAgregado(itens);
-    return {
-      titulo: chave,
-      totalRespostas: itens.length,
-      positivo: agregado.positivo,
-      neutro: agregado.neutro,
-      negativo: agregado.negativo,
-      colaboradores: itens.map(function(en) { return en.nome; })
-    };
-  });
-}
-
-function calcularSentimentoAgregado(itens) {
-  var total = itens.length || 1;
-  var positivos = itens.filter(function(en) { return en.sentimento === 'positivo'; }).length;
-  var negativos = itens.filter(function(en) { return en.sentimento === 'negativo'; }).length;
-  var neutros = total - positivos - negativos;
-
-  return {
-    positivo: Math.round((positivos / total) * 100),
-    neutro: Math.round((neutros / total) * 100),
-    negativo: Math.round((negativos / total) * 100)
-  };
-}
-
-function formatPhotoBatchRow(row) {
-  var entradas = [];
-  var perguntas = [];
-  var setores = [];
-  var pontosPositivosGerais = [];
-  var pontosNegativosGerais = [];
-  try { entradas = JSON.parse(row.entradas || '[]'); } catch (e) { entradas = []; }
-  try { perguntas = JSON.parse(row.perguntas || '[]'); } catch (e) { perguntas = []; }
-  try { setores = JSON.parse(row.setores || '[]'); } catch (e) { setores = []; }
-  try { pontosPositivosGerais = JSON.parse(row.pontos_positivos_gerais || '[]'); } catch (e) { pontosPositivosGerais = []; }
-  try { pontosNegativosGerais = JSON.parse(row.pontos_negativos_gerais || '[]'); } catch (e) { pontosNegativosGerais = []; }
-
-  return {
-    id: row.id,
-    titulo: row.titulo || '',
-    entradas: entradas,
-    perguntas: perguntas,
-    setores: setores,
-    resumoGeral: row.resumo_geral || '',
-    positivoGeral: Number(row.positivo_geral) || 0,
-    neutroGeral: Number(row.neutro_geral) || 0,
-    negativoGeral: Number(row.negativo_geral) || 0,
-    pontosPositivosGerais: pontosPositivosGerais,
-    pontosNegativosGerais: pontosNegativosGerais,
-    criadoEm: row.criado_em || '',
-    atualizadoEm: row.atualizado_em || ''
-  };
-}
-
-/**
- * Lista as análises de fotos já feitas. Usuários comuns só veem as próprias; ADM vê todas.
- */
-function listarAnalisesFotos(token) {
-  var userRaw = getUserFromToken(token);
-  if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
-
-  var rows = getRowsAsObjects(getOrCreateSheet(SHEETS.PHOTO_BATCHES));
-  var visibleRows = String(userRaw.role) === 'admin'
-    ? rows
-    : rows.filter(function(r) { return String(r.user_id) === String(userRaw.id); });
-
-  return visibleRows
-    .map(formatPhotoBatchRow)
-    .sort(function(a, b) { return (b.criadoEm || '').localeCompare(a.criadoEm || ''); });
-}
-
-/**
- * Exclui uma análise de fotos (apenas quem criou ou o ADM podem excluir).
- */
-function excluirAnaliseFotos(token, batchId) {
-  var userRaw = getUserFromToken(token);
-  if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
-
-  var sheet = getOrCreateSheet(SHEETS.PHOTO_BATCHES);
-  var data = sheet.getDataRange().getValues();
-  var headers = data[0];
-  var idCol = headers.indexOf('id');
-  var userCol = headers.indexOf('user_id');
-
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][idCol]) === String(batchId)) {
-      if (String(userRaw.role) !== 'admin' && String(data[i][userCol]) !== String(userRaw.id)) {
-        throw new Error('Acesso negado: esta análise pertence a outro usuário.');
-      }
-      sheet.deleteRow(i + 1);
-      return { success: true };
-    }
-  }
-  throw new Error('Análise não encontrada.');
-}
-
-/**
- * Chama o Gemini com todas as fotos do lote de uma vez (multimodal: texto + imagens),
- * pedindo a transcrição, o sentimento individual de cada uma, a detecção automática de
- * quantas perguntas/temas distintos existem entre as respostas, e o resumo geral do lote.
- */
-function callGeminiForPhotoSentiment(titulo, entradas) {
-  var apiKey = getGeminiApiKey();
-
-  var parts = [];
-  parts.push({
-    text: 'Você é um analista de pesquisas de clima organizacional. As imagens a seguir são fotos de respostas ' +
-      'em papel (escritas à mão ou impressas), uma por colaborador, coletadas sob o tema/título: "' + titulo + '".\n' +
-      'Há ao todo ' + entradas.length + ' fotos, na ordem em que aparecem abaixo (Foto 1, Foto 2, ...). ' +
-      'IMPORTANTE: essas fotos podem conter respostas para UMA ÚNICA pergunta, ou para VÁRIAS perguntas/temas ' +
-      'diferentes misturadas no mesmo lote. Você deve identificar isso sozinho, agrupando as respostas.'
-  });
-
-  entradas.forEach(function(en, i) {
-    parts.push({ text: 'Foto ' + (i + 1) + ' (colaborador: ' + String(en.nome).trim() + '):' });
-    parts.push({ inlineData: { mimeType: en.mimeType || 'image/jpeg', data: en.base64 } });
-  });
-
-  parts.push({
-    text: 'Leia o texto de cada foto (mesmo que a letra seja manuscrita) e responda SOMENTE com um JSON válido, ' +
-      'sem nenhum texto antes ou depois, no formato exato abaixo:\n' +
-      '{"perguntas": [{"titulo": "um título curto resumindo a pergunta/tema identificado nº1"}, ' +
-      '{"titulo": "pergunta/tema nº2, se houver outra diferente da primeira"}], ' +
-      '"entradas": [{"transcricao": "texto lido na Foto 1", "sentimento": "positivo|neutro|negativo", ' +
-      '"perguntaIndex": indice_da_pergunta_no_array_perguntas_acima_0_baseado}, ' +
-      '"... exatamente ' + entradas.length + ' itens, um por foto, na mesma ordem"], ' +
-      '"resumoGeral": "um parágrafo curto em português resumindo o clima geral de TODAS as respostas juntas", ' +
-      '"pontosPositivosGerais": ["até 5 frases curtas com os principais elogios/pontos fortes do lote inteiro"], ' +
-      '"pontosNegativosGerais": ["até 5 frases curtas com as principais críticas/pontos de atenção do lote inteiro"]}\n' +
-      'Regras: se todas as respostas forem sobre o mesmo tema, o array "perguntas" deve ter só 1 item, e todo mundo ' +
-      'aponta para perguntaIndex 0. Se não conseguir ler alguma foto com clareza, use "(não foi possível ler esta ' +
-      'foto com clareza)" como transcrição e classifique o sentimento dela como "neutro".'
-  });
-
-  var payload = {
-    contents: [{ parts: parts }],
-    generationConfig: {
-      temperature: 0.2,
-      responseMimeType: 'application/json'
-    }
-  };
-
-  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent?key=' + apiKey;
-
-  var response = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  });
-
-  var statusCode = response.getResponseCode();
-  var responseText = response.getContentText();
-
-  if (statusCode !== 200) {
-    logOperation('AI_ERROR', 'Gemini (fotos) retornou ' + statusCode + ': ' + responseText, 'ERROR');
-    throw new Error('A IA não conseguiu processar as fotos agora (código ' + statusCode + '). Tente novamente em alguns instantes — pode ser um limite temporário da cota gratuita, ou o lote de fotos é grande demais para uma única chamada.');
-  }
-
-  var parsedResponse;
-  try {
-    parsedResponse = JSON.parse(responseText);
-  } catch (e) {
-    throw new Error('A IA retornou uma resposta inesperada. Tente novamente.');
-  }
-
-  var textContent = parsedResponse.candidates && parsedResponse.candidates[0] &&
-    parsedResponse.candidates[0].content && parsedResponse.candidates[0].content.parts &&
-    parsedResponse.candidates[0].content.parts[0] && parsedResponse.candidates[0].content.parts[0].text;
-
-  if (!textContent) {
-    throw new Error('A IA não retornou nenhum resultado. Tente novamente.');
-  }
-
-  var resultJson;
-  try {
-    resultJson = JSON.parse(textContent);
-  } catch (e) {
-    var match = textContent.match(/\{[\s\S]*\}/);
-    if (match) {
-      resultJson = JSON.parse(match[0]);
-    } else {
-      throw new Error('Não foi possível interpretar o resultado da IA. Tente novamente.');
-    }
-  }
-
-  return {
-    perguntas: Array.isArray(resultJson.perguntas) ? resultJson.perguntas : [],
-    entradas: Array.isArray(resultJson.entradas) ? resultJson.entradas : [],
-    resumoGeral: resultJson.resumoGeral || '',
-    pontosPositivosGerais: Array.isArray(resultJson.pontosPositivosGerais) ? resultJson.pontosPositivosGerais : [],
-    pontosNegativosGerais: Array.isArray(resultJson.pontosNegativosGerais) ? resultJson.pontosNegativosGerais : []
   };
 }
 
@@ -2117,13 +1823,6 @@ function renderStandaloneSurveyHtml(surveyId, e) {
 '          body += "</div><div class=\'flex justify-between text-[10px] text-slate-400 font-semibold px-1\'><span>0 - Nada provável</span><span>10 - Extremamente provável</span></div></div>";' +
 '        } else if (qType === "long_text" || qType === "paragrafo" || qType === "texto_longo") {' +
 '          body = "<textarea name=\'q_" + q.id + "\' rows=\'4\' " + reqAttr + " placeholder=\'Sua resposta detalhada...\' class=\'w-full bg-slate-50 border border-slate-200 rounded-2xl p-3.5 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all\'></textarea>";' +
-'        } else if (qType === "foto") {' +
-'          body = "<input type=\'hidden\' name=\'q_" + q.id + "\' id=\'hidden_q_" + q.id + "\' value=\'\'>" +' +
-'            "<div id=\'preview_q_" + q.id + "\' class=\'mb-2\'></div>" +' +
-'            "<label class=\'flex flex-col items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-2xl p-6 cursor-pointer hover:border-blue-400 hover:bg-blue-50/40 transition-colors\'>" +' +
-'              "<span class=\'photo-label-text text-xs font-semibold text-slate-500\'>\uD83D\uDCF7 Toque para tirar ou enviar uma foto</span>" +' +
-'              "<input type=\'file\' accept=\'image/*\' capture=\'environment\' class=\'pesquisahub-photo-file hidden\' data-qid=\'" + q.id + "\'>" +' +
-'            "</label>";' +
 '        } else {' +
 '          body = "<input type=\'text\' name=\'q_" + q.id + "\' " + reqAttr + " placeholder=\'Sua resposta...\' class=\'w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all\'>";' +
 '        }' +
@@ -2134,84 +1833,8 @@ function renderStandaloneSurveyHtml(surveyId, e) {
 '    }' +
 '    renderQuestions();' +
 '    ' +
-'    function compressImageToBase64(file) {' +
-'      return new Promise(function(resolve, reject) {' +
-'        var reader = new FileReader();' +
-'        reader.onerror = function() { reject(new Error("Não foi possível ler o arquivo.")); };' +
-'        reader.onload = function() {' +
-'          var img = new Image();' +
-'          img.onerror = function() { reject(new Error("Não foi possível processar a imagem.")); };' +
-'          img.onload = function() {' +
-'            var maxDim = 1280;' +
-'            var width = img.width, height = img.height;' +
-'            if (width > maxDim || height > maxDim) {' +
-'              if (width >= height) { height = Math.round((height / width) * maxDim); width = maxDim; }' +
-'              else { width = Math.round((width / height) * maxDim); height = maxDim; }' +
-'            }' +
-'            var canvas = document.createElement("canvas");' +
-'            canvas.width = width; canvas.height = height;' +
-'            var ctx = canvas.getContext("2d");' +
-'            ctx.drawImage(img, 0, 0, width, height);' +
-'            var dataUrl = canvas.toDataURL("image/jpeg", 0.72);' +
-'            resolve(dataUrl.split(",")[1] || "");' +
-'          };' +
-'          img.src = reader.result;' +
-'        };' +
-'        reader.readAsDataURL(file);' +
-'      });' +
-'    }' +
-'    ' +
-'    function wirePhotoInputs() {' +
-'      var fileInputs = document.querySelectorAll(".pesquisahub-photo-file");' +
-'      fileInputs.forEach(function(input) {' +
-'        input.addEventListener("change", function() {' +
-'          var qid = input.getAttribute("data-qid");' +
-'          var file = input.files && input.files[0];' +
-'          if (!file) return;' +
-'          var previewEl = document.getElementById("preview_q_" + qid);' +
-'          var hiddenEl = document.getElementById("hidden_q_" + qid);' +
-'          var labelText = input.parentElement.querySelector(".photo-label-text");' +
-'          if (labelText) labelText.textContent = "Enviando foto...";' +
-'          input.disabled = true;' +
-'          compressImageToBase64(file).then(function(base64) {' +
-'            return fetch(SCRIPT_URL, {' +
-'              method: "POST",' +
-'              headers: { "Content-Type": "text/plain;charset=utf-8" },' +
-'              body: JSON.stringify({ action: "uploadPhoto", surveyId: surveyData.survey.id, mimeType: "image/jpeg", base64: base64 })' +
-'            });' +
-'          }).then(function(res) { return res.json(); }).then(function(result) {' +
-'            if ((result.success || result.status === "ok") && result.data && result.data.url) {' +
-'              hiddenEl.value = result.data.url;' +
-'              if (previewEl) previewEl.innerHTML = "<img src=\'" + result.data.url + "\' style=\'max-width:220px;border-radius:16px;border:1px solid #e2e8f0\' />";' +
-'              if (labelText) labelText.textContent = "Foto enviada! Toque para trocar";' +
-'            } else {' +
-'              if (labelText) labelText.textContent = "Falha ao enviar. Toque para tentar novamente";' +
-'              alert("Não foi possível enviar a foto: " + (result.message || "erro desconhecido"));' +
-'            }' +
-'            input.disabled = false;' +
-'          }).catch(function(err) {' +
-'            if (labelText) labelText.textContent = "Falha ao enviar. Toque para tentar novamente";' +
-'            alert("Falha ao enviar a foto: " + err.message);' +
-'            input.disabled = false;' +
-'          });' +
-'        });' +
-'      });' +
-'    }' +
-'    wirePhotoInputs();' +
-'    ' +
 '    function submitForm(e) {' +
 '      e.preventDefault();' +
-'      ' +
-'      for (var vi = 0; vi < surveyData.questions.length; vi++) {' +
-'        var vq = surveyData.questions[vi];' +
-'        if (vq.tipo === "foto" && vq.obrigatoria) {' +
-'          var vHidden = document.getElementById("hidden_q_" + vq.id);' +
-'          if (!vHidden || !vHidden.value) {' +
-'            alert("A pergunta \\"" + vq.titulo + "\\" exige uma foto. Envie a foto antes de continuar.");' +
-'            return;' +
-'          }' +
-'        }' +
-'      }' +
 '      ' +
 '      var btn = document.getElementById("btnSubmit");' +
 '      btn.disabled = true;' +
