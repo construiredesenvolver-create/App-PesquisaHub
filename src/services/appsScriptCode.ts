@@ -759,6 +759,11 @@ function doPost(e) {
         responseData = { status: 'ok', success: true, data: sentimentResult };
         break;
 
+      case 'updateSurveyContextoIA':
+        var contextoIAResult = updateSurveyContextoIA(postData.token, postData.surveyId, postData.contextoIA);
+        responseData = { status: 'ok', success: true, data: contextoIAResult };
+        break;
+
       case 'saveAppSettings':
         var savedSettings = saveAppSettings(postData.token, postData.logoUrl, postData.nomeExibicao);
         responseData = { status: 'ok', success: true, data: savedSettings };
@@ -874,8 +879,7 @@ function formatSentimentRow(row) {
  * isso mantém o uso bem dentro da cota gratuita do Gemini.
  */
 function analisarSentimentoPergunta(token, surveyId, questionId) {
-  var userRaw = getUserFromToken(token);
-  if (!userRaw) throw new Error('Sessão inválida ou expirada. Faça login novamente.');
+  var userRaw = getUserFromTokenOrThrow(token);
 
   var surveyData = getFullSurvey(surveyId);
   if (String(userRaw.role) !== 'admin' && String(surveyData.survey.criado_por) !== String(userRaw.id)) {
@@ -894,7 +898,9 @@ function analisarSentimentoPergunta(token, surveyId, questionId) {
     throw new Error('Ainda não há respostas de texto para analisar nesta pergunta.');
   }
 
-  var geminiResult = callGeminiForSentiment(question.titulo, textos);
+  var contextoIA = (surveyData.survey.configuracoes && surveyData.survey.configuracoes.contexto_ia) || '';
+
+  var geminiResult = callGeminiForSentiment(question.titulo, textos, contextoIA);
 
   var analysisRow = {
     id: 'ai_' + surveyId + '_' + questionId,
@@ -912,7 +918,7 @@ function analisarSentimentoPergunta(token, surveyId, questionId) {
 
   saveOrUpdateSentimentRow(analysisRow);
 
-  logOperation('AI_SENTIMENT', 'Sentimento analisado para pergunta ' + questionId + ' (' + textos.length + ' respostas)', 'SUCCESS');
+  logOperation('AI_SENTIMENT', 'Sentimento analisado para pergunta ' + questionId + ' (' + textos.length + ' respostas, ' + geminiResult.respostasIgnoradas + ' ignoradas por serem vazias/irrelevantes)', 'SUCCESS');
 
   return {
     questionId: questionId,
@@ -924,8 +930,47 @@ function analisarSentimentoPergunta(token, surveyId, questionId) {
     pontosPositivos: geminiResult.pontosPositivos || [],
     pontosNegativos: geminiResult.pontosNegativos || [],
     respostasAnalisadas: textos.length,
+    respostasIgnoradas: geminiResult.respostasIgnoradas || 0,
     atualizadoEm: analysisRow.atualizado_em
   };
+}
+
+/**
+ * Salva (ou limpa, se vazio) o contexto/instruções que a IA deve considerar sempre que
+ * analisar o sentimento de qualquer pergunta de texto livre desta pesquisa.
+ * Apenas o dono da pesquisa (ou o ADM) pode alterar.
+ */
+function updateSurveyContextoIA(token, surveyId, contextoIA) {
+  var userRaw = getUserFromTokenOrThrow(token);
+
+  var sheet = getOrCreateSheet(SHEETS.SURVEYS);
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var idCol = headers.indexOf('id');
+  var criadoPorCol = headers.indexOf('criado_por');
+  var configCol = headers.indexOf('configuracoes');
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][idCol]) === String(surveyId)) {
+      if (String(userRaw.role) !== 'admin' && String(data[i][criadoPorCol]) !== String(userRaw.id)) {
+        throw new Error('Acesso negado: esta pesquisa pertence a outro usuário.');
+      }
+
+      var config = {};
+      try {
+        config = data[i][configCol] ? JSON.parse(data[i][configCol]) : {};
+      } catch (e) {
+        config = {};
+      }
+      config.contexto_ia = String(contextoIA || '').trim();
+
+      sheet.getRange(i + 1, configCol + 1).setValue(JSON.stringify(config));
+      logOperation('UPDATE_CONTEXTO_IA', 'Contexto de IA atualizado para a pesquisa ' + surveyId, 'SUCCESS');
+      return { success: true, contextoIA: config.contexto_ia };
+    }
+  }
+
+  throw new Error('Pesquisa não encontrada.');
 }
 
 function saveOrUpdateSentimentRow(row) {
@@ -949,8 +994,11 @@ function saveOrUpdateSentimentRow(row) {
 /**
  * Chama a API do Google Gemini para resumir o sentimento de uma lista de respostas de texto.
  * Faz UMA única chamada por pergunta (nunca uma por resposta), para economizar cota gratuita.
+ *
+ * "contextoIA" é um texto opcional, configurado por pesquisa, com informações que ajudam a IA
+ * a entender melhor o contexto (ex: jargões internos, situação da equipe na época da coleta).
  */
-function callGeminiForSentiment(questionTitle, textos) {
+function callGeminiForSentiment(questionTitle, textos, contextoIA) {
   var apiKey = getGeminiApiKey();
 
   // Limitar a quantidade de texto enviada à IA (mantém o pedido leve e dentro da cota gratuita)
@@ -958,18 +1006,38 @@ function callGeminiForSentiment(questionTitle, textos) {
   var amostra = textos.slice(0, MAX_RESPOSTAS);
   var listaRespostas = amostra.map(function(t, i) { return (i + 1) + '. ' + t; }).join('\n');
 
-  var prompt = 'Você é um analista de pesquisas de clima organizacional. ' +
-    'Pergunta feita aos respondentes: "' + questionTitle + '".\n\n' +
-    'Respostas recebidas (uma por linha):\n' + listaRespostas + '\n\n' +
-    'Analise o SENTIMENTO de todas as respostas acima e responda SOMENTE com um JSON válido, ' +
-    'sem nenhum texto antes ou depois, no seguinte formato exato:\n' +
-    '{"resumo": "um parágrafo curto em português resumindo o clima geral das respostas", ' +
+  var blocoContexto = contextoIA && String(contextoIA).trim()
+    ? '\nCONTEXTO ADICIONAL FORNECIDO PELO RESPONSÁVEL PELA PESQUISA (use isso para interpretar melhor as respostas, ' +
+      'como jargões internos, situação da equipe, ou o que conta como elogio/crítica neste contexto específico):\n"' +
+      String(contextoIA).trim() + '"\n'
+    : '';
+
+  var prompt = 'Você é um analista sênior de pesquisas de clima organizacional, especializado em português do Brasil, ' +
+    'incluindo gírias, ironia e sarcasmo comuns em respostas informais de colaboradores.\n' +
+    'Pergunta feita aos respondentes: "' + questionTitle + '".\n' +
+    blocoContexto + '\n' +
+    'Respostas recebidas (uma por linha, numeradas):\n' + listaRespostas + '\n\n' +
+    'INSTRUÇÕES IMPORTANTES para uma análise precisa:\n' +
+    '1. Seja CONSERVADOR ao classificar como "positivo": só classifique assim respostas que expressem satisfação real, ' +
+    'não apenas ausência de reclamação. Respostas vagas, curtas demais para ter conteúdo real, ou sem relação com a ' +
+    'pergunta (ex: "N/A", "-", "kkk", ".", respostas em branco) NÃO devem ser contadas nos percentuais de sentimento ' +
+    '— exclua-as do cálculo e informe quantas foram excluídas em "respostasIgnoradas".\n' +
+    '2. Fique atento a ironia e sarcasmo (comuns em respostas informais): uma frase com palavras positivas usada de forma ' +
+    'sarcástica deve ser classificada como negativa.\n' +
+    '3. Nos pontos positivos e negativos, prefira citar um TRECHO CURTO E LITERAL de alguma resposta real (não invente ' +
+    'nem parafraseie demais), entre aspas, seguido de uma explicação breve se necessário.\n' +
+    '4. Se o contexto adicional fornecido acima mencionar jargões ou termos internos, use-o para interpretar corretamente ' +
+    'o que os respondentes quiseram dizer.\n\n' +
+    'Responda SOMENTE com um JSON válido, sem nenhum texto antes ou depois, no formato exato abaixo:\n' +
+    '{"resumo": "um parágrafo curto em português resumindo o clima geral das respostas VÁLIDAS (ignorando as vazias/irrelevantes)", ' +
     '"positivo": numero_inteiro_percentual_0_a_100, ' +
     '"neutro": numero_inteiro_percentual_0_a_100, ' +
     '"negativo": numero_inteiro_percentual_0_a_100, ' +
-    '"pontosPositivos": ["até 5 frases curtas com os principais elogios/pontos fortes citados"], ' +
-    '"pontosNegativos": ["até 5 frases curtas com as principais críticas/pontos de atenção citados"]}\n' +
-    'Os três percentuais (positivo, neutro, negativo) devem somar exatamente 100.';
+    '"respostasIgnoradas": numero_inteiro_de_respostas_vazias_ou_sem_conteudo_real, ' +
+    '"pontosPositivos": ["até 5 itens com um trecho curto literal + explicação breve"], ' +
+    '"pontosNegativos": ["até 5 itens com um trecho curto literal + explicação breve"]}\n' +
+    'Os três percentuais (positivo, neutro, negativo) devem somar exatamente 100 e devem ser calculados apenas sobre as ' +
+    'respostas válidas (excluindo as vazias/irrelevantes contadas em respostasIgnoradas).';
 
   var payload = {
     contents: [{ parts: [{ text: prompt }] }],
@@ -1029,6 +1097,7 @@ function callGeminiForSentiment(questionTitle, textos) {
     positivo: Number(resultJson.positivo) || 0,
     neutro: Number(resultJson.neutro) || 0,
     negativo: Number(resultJson.negativo) || 0,
+    respostasIgnoradas: Number(resultJson.respostasIgnoradas) || 0,
     pontosPositivos: Array.isArray(resultJson.pontosPositivos) ? resultJson.pontosPositivos : [],
     pontosNegativos: Array.isArray(resultJson.pontosNegativos) ? resultJson.pontosNegativos : []
   };
