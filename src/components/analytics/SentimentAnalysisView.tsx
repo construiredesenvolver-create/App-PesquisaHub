@@ -103,7 +103,7 @@ const ContextoIACard: React.FC<{ surveyId: string; initialContexto: string }> = 
             value={contexto}
             onChange={(e) => setContexto(e.target.value)}
             rows={3}
-            placeholder='Ex: "Esta pesquisa foi aplicada à equipe de operações durante a reestruturação de Janeiro. \'O novo sistema\' se refere ao ERP implantado nesse período."'
+            placeholder={'Ex: "Esta pesquisa foi aplicada à equipe de operações durante a reestruturação de Janeiro. O termo \'novo sistema\' se refere ao ERP implantado nesse período."'}
             className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
           />
           {error && (
