@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { Sparkles, RefreshCw, Loader2, ThumbsUp, ThumbsDown, MessageSquareText, AlertCircle } from 'lucide-react';
+import { Sparkles, RefreshCw, Loader2, ThumbsUp, ThumbsDown, MessageSquareText, AlertCircle, Settings2, Check } from 'lucide-react';
 import { SurveyAnalyticsData, SentimentAnalysisResult } from '../../types';
 import { ApiService } from '../../services/api';
 
@@ -40,6 +40,8 @@ export const SentimentAnalysisView: React.FC<SentimentAnalysisViewProps> = ({ an
         </p>
       </div>
 
+      <ContextoIACard surveyId={survey.id} initialContexto={survey.configuracoes?.contexto_ia || ''} />
+
       {openTextQuestions.map((q) => {
         const totalAnswersForQuestion = answers.filter((a) => a.question_id === q.id && a.valor?.trim()).length;
         return (
@@ -52,6 +54,76 @@ export const SentimentAnalysisView: React.FC<SentimentAnalysisViewProps> = ({ an
           />
         );
       })}
+    </div>
+  );
+};
+
+const ContextoIACard: React.FC<{ surveyId: string; initialContexto: string }> = ({ surveyId, initialContexto }) => {
+  const [expanded, setExpanded] = useState(!!initialContexto);
+  const [contexto, setContexto] = useState(initialContexto);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    setError(null);
+    setSaving(true);
+    try {
+      await ApiService.updateSurveyContextoIA(surveyId, contexto.trim());
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err: any) {
+      setError(err.message || 'Não foi possível salvar o contexto.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-3xl border border-slate-200 p-5 sm:p-6">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 text-left"
+      >
+        <div className="flex items-center gap-2">
+          <Settings2 className="w-4 h-4 text-slate-500" />
+          <span className="text-sm font-bold text-slate-800">Contexto para a IA (opcional)</span>
+        </div>
+        <span className="text-[11px] font-semibold text-indigo-600">{expanded ? 'Recolher' : 'Configurar'}</span>
+      </button>
+
+      {expanded && (
+        <div className="mt-4 space-y-3">
+          <p className="text-xs text-slate-500">
+            Explique aqui algo que ajude a IA a entender melhor as respostas desta pesquisa — jargões internos,
+            a situação da equipe na época da coleta, ou o que conta como elogio/crítica no seu contexto. Isso vale
+            para todas as perguntas de texto livre desta pesquisa, em toda análise futura.
+          </p>
+          <textarea
+            value={contexto}
+            onChange={(e) => setContexto(e.target.value)}
+            rows={3}
+            placeholder='Ex: "Esta pesquisa foi aplicada à equipe de operações durante a reestruturação de Janeiro. \'O novo sistema\' se refere ao ERP implantado nesse período."'
+            className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+          />
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-medium rounded-xl px-3 py-2">
+              {error}
+            </div>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-2 disabled:opacity-60"
+          >
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <Check className="w-3.5 h-3.5" /> : null}
+            <span>{saved ? 'Salvo!' : 'Salvar contexto'}</span>
+          </button>
+          <p className="text-[10px] text-slate-400">
+            Depois de salvar, clique em "Reanalisar" nas perguntas abaixo para que a próxima análise já considere este contexto.
+          </p>
+        </div>
+      )}
     </div>
   );
 };
@@ -216,6 +288,7 @@ const QuestionSentimentCard: React.FC<{
 
               <p className="text-[10px] text-slate-400">
                 Última análise: {new Date(result.atualizadoEm).toLocaleString('pt-BR')} • {result.respostasAnalisadas} resposta(s) consideradas
+                {!!result.respostasIgnoradas && ` • ${result.respostasIgnoradas} ignorada(s) por estarem vazias/sem conteúdo relevante`}
               </p>
             </div>
           </div>
