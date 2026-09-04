@@ -1346,6 +1346,30 @@ export class ApiService {
     return result.data as SentimentAnalysisResult;
   }
 
+  /**
+   * Salva o contexto/instruções que a IA deve considerar sempre que analisar respostas
+   * de texto livre desta pesquisa (ex: jargões internos, situação da equipe na coleta).
+   * Passe uma string vazia para remover o contexto salvo.
+   */
+  public static async updateSurveyContextoIA(surveyId: string, contextoIA: string): Promise<void> {
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) throw new Error('Google Apps Script não configurado.');
+    const token = AuthService.getToken();
+    if (!token) throw new Error('Você não está logado.');
+
+    const response = await fetch(config.webAppUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ action: 'updateSurveyContextoIA', token, surveyId, contextoIA })
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status} ao salvar o contexto.`);
+    const result = await response.json();
+    if (result.status !== 'ok' && result.success !== true) {
+      throw new Error(result.message || 'Não foi possível salvar o contexto.');
+    }
+  }
+
   // ==========================================
   // IDENTIDADE VISUAL (LOGO / MARCA)
   // ==========================================
