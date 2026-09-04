@@ -16,6 +16,7 @@ export interface SurveySettings {
   tempo_estimado_min?: number;
   mensagem_conclusao?: string;
   categoria?: string;
+  contexto_ia?: string;
 }
 
 export interface Survey {
@@ -204,6 +205,7 @@ export interface SentimentAnalysisResult {
   pontosPositivos: string[];
   pontosNegativos: string[];
   respostasAnalisadas: number;
+  respostasIgnoradas?: number;
   atualizadoEm: string;
 }
 
