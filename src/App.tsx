@@ -33,7 +33,11 @@ export function App() {
   // pois é usada na tela de login, no menu lateral e no formulário público
   const [appSettings, setAppSettings] = useState<AppSettings>({ logoUrl: '', nomeExibicao: '' });
 
-  // Inicialização e dados centrais (sincronizados com Google Sheets)
+  // Inicialização e dados centrais (sincronizados com Google Sheets).
+  // `surveys` e `respondents` vêm do endpoint leve (getDashboardData) e são
+  // recarregados a cada ação. `questions`/`options`/`answers` só chegam quando uma
+  // pesquisa específica é aberta (ver fetchSurveyDetailFor abaixo) — evita baixar
+  // o histórico de respostas de TODAS as pesquisas sempre que qualquer tela abre.
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [options, setOptions] = useState<Option[]>([]);
@@ -60,6 +64,9 @@ export function App() {
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // Carregando os detalhes completos (perguntas/opções/respostas) de UMA pesquisa,
+  // ao abrir Analytics ou o Builder para editá-la.
+  const [isLoadingSurveyDetail, setIsLoadingSurveyDetail] = useState(false);
   const [isSavingSurvey, setIsSavingSurvey] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -71,7 +78,11 @@ export function App() {
     }, 4000);
   }, []);
 
-  // Recarregar dados reais da planilha Google Sheets
+  // Recarregar os dados "leves" da planilha Google Sheets: lista de pesquisas (já
+  // com contadores prontos) + respondentes (sem as respostas de texto). Rápido o
+  // bastante para ser chamado a cada ação (criar, publicar, excluir, duplicar) sem
+  // travar a interface. NÃO mexe em questions/options/answers — esses só são
+  // atualizados quando uma pesquisa específica é aberta (ver fetchSurveyDetailFor).
   const refreshDataFromSheets = useCallback(async () => {
     setIsRefreshing(true);
     ApiService.init();
@@ -80,13 +91,10 @@ export function App() {
 
     if (config.webAppUrl) {
       try {
-        const result = await ApiService.fetchAllDataFromSheets();
+        const result = await ApiService.fetchDashboardDataFromSheets();
         if (result.success && result.data) {
           setSurveys(result.data.surveys);
-          setQuestions(result.data.questions);
-          setOptions(result.data.options);
           setRespondents(result.data.respondents);
-          setAnswers(result.data.answers);
           setGasConfig(ApiService.getGasConfig());
           setApiError(null);
         } else {
@@ -105,6 +113,25 @@ export function App() {
     }
     setIsRefreshing(false);
   }, []);
+
+  // Carrega perguntas/opções/respondentes/respostas de UMA pesquisa (sob demanda) e
+  // atualiza o estado local com o cache completo já mesclado. Usado ao abrir
+  // Analytics ou o Builder para editar uma pesquisa existente.
+  const fetchSurveyDetailFor = useCallback(async (surveyId: string) => {
+    setIsLoadingSurveyDetail(true);
+    try {
+      const result = await ApiService.fetchSurveyDetail(surveyId);
+      setQuestions(result.questions);
+      setOptions(result.options);
+      setRespondents(result.respondents);
+      setAnswers(result.answers);
+      if (!result.success && result.message) {
+        showToast(`Não foi possível carregar todos os detalhes: ${result.message}`);
+      }
+    } finally {
+      setIsLoadingSurveyDetail(false);
+    }
+  }, [showToast]);
 
   // Carregar dados de uma pesquisa pública individual (para links diretos / anônimos)
   const loadPublicSurvey = useCallback(async (surveyIdOrSlug: string) => {
@@ -175,6 +202,10 @@ export function App() {
     setActiveSurveyId(surveyId);
     setActiveTab('analytics');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    // Busca os detalhes completos desta pesquisa sob demanda (perguntas, opções,
+    // respondentes e respostas) — não fica mais preso ao que já tivesse sido
+    // baixado antes.
+    fetchSurveyDetailFor(surveyId);
   };
 
   const handleOpenNewSurvey = () => {
@@ -187,6 +218,9 @@ export function App() {
     setEditingSurvey(survey);
     setActiveTab('builder');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    // Garante que as perguntas/opções desta pesquisa estejam carregadas antes de
+    // editar (caso o usuário ainda não tenha aberto essa pesquisa nesta sessão).
+    fetchSurveyDetailFor(survey.id);
   };
 
   const handleSaveSurvey = async (
@@ -211,7 +245,7 @@ export function App() {
         showToast(`Pesquisa "${newSurvey.titulo}" criada com sucesso no Google Sheets!`);
       }
 
-      // Sincronizar em background
+      // Sincronizar em segundo plano (agora leve — só pesquisas + respondentes)
       await refreshDataFromSheets();
       setEditingSurvey(null);
       setActiveTab('surveys');
@@ -225,6 +259,9 @@ export function App() {
 
   const handleDuplicateSurvey = async (surveyId: string) => {
     try {
+      // A pesquisa original precisa estar carregada em memória (perguntas/opções)
+      // para poder ser duplicada — garante isso antes de chamar duplicateSurvey.
+      await fetchSurveyDetailFor(surveyId);
       const duplicated = await ApiService.duplicateSurvey(surveyId);
       if (duplicated) {
         setSurveys(ApiService.getSurveys());
@@ -302,10 +339,11 @@ export function App() {
     answersMap: Record<string, string | string[]>,
     identificador?: string
   ) => {
-    const result = await ApiService.submitResponse(surveyId, respondentName, answersMap, identificador);
-    // Atualizar dados em segundo plano
-    refreshDataFromSheets().catch(console.warn);
-    return result;
+    // Observação: não recarregamos os dados administrativos aqui — quem responde
+    // a pesquisa não está logado e não vê o painel, então não há nada para
+    // atualizar nesta sessão. Isso também evita uma chamada extra ao Apps Script
+    // logo após o envio, na hora em que ele está mais ocupado gravando a resposta.
+    return ApiService.submitResponse(surveyId, respondentName, answersMap, identificador);
   };
 
   // Exportação CSV com dados reais
@@ -473,29 +511,43 @@ export function App() {
           )}
 
           {effectiveTab === 'builder' && (
-            <SurveyBuilder
-              initialSurvey={editingSurvey}
-              initialQuestions={editingSurvey ? questions.filter((q) => q.survey_id === editingSurvey.id) : undefined}
-              initialOptions={editingSurvey ? options : undefined}
-              isSaving={isSavingSurvey}
-              onSaveSurvey={handleSaveSurvey}
-              onCancel={() => setActiveTab(surveys.length > 0 ? 'surveys' : 'dashboard')}
-            />
+            isLoadingSurveyDetail && editingSurvey ? (
+              <div className="p-8 flex flex-col items-center justify-center gap-3 text-center min-h-[50vh]">
+                <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                <p className="text-xs font-semibold text-slate-500">Carregando perguntas desta pesquisa...</p>
+              </div>
+            ) : (
+              <SurveyBuilder
+                initialSurvey={editingSurvey}
+                initialQuestions={editingSurvey ? questions.filter((q) => q.survey_id === editingSurvey.id) : undefined}
+                initialOptions={editingSurvey ? options : undefined}
+                isSaving={isSavingSurvey}
+                onSaveSurvey={handleSaveSurvey}
+                onCancel={() => setActiveTab(surveys.length > 0 ? 'surveys' : 'dashboard')}
+              />
+            )
           )}
 
           {effectiveTab === 'analytics' && (
             activeSurvey ? (
-              <AnalyticsView
-                survey={activeSurvey}
-                questions={currentSurveyQuestions}
-                options={currentSurveyOptions}
-                respondents={currentSurveyRespondents}
-                answers={currentSurveyAnswers}
-                onBackToSurveys={() => setActiveTab('surveys')}
-                onShareSurvey={(s) => setShareModalSurvey(s)}
-                onOpenPublicView={handleOpenPublicView}
-                onExportCSV={handleExportCSV}
-              />
+              isLoadingSurveyDetail ? (
+                <div className="p-8 flex flex-col items-center justify-center gap-3 text-center min-h-[50vh]">
+                  <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                  <p className="text-xs font-semibold text-slate-500">Carregando respostas desta pesquisa...</p>
+                </div>
+              ) : (
+                <AnalyticsView
+                  survey={activeSurvey}
+                  questions={currentSurveyQuestions}
+                  options={currentSurveyOptions}
+                  respondents={currentSurveyRespondents}
+                  answers={currentSurveyAnswers}
+                  onBackToSurveys={() => setActiveTab('surveys')}
+                  onShareSurvey={(s) => setShareModalSurvey(s)}
+                  onOpenPublicView={handleOpenPublicView}
+                  onExportCSV={handleExportCSV}
+                />
+              )
             ) : (
               <div className="p-8 text-center space-y-4">
                 <p className="text-slate-500 text-sm">Selecione uma pesquisa para analisar.</p>
