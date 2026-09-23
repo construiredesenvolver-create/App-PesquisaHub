@@ -30,6 +30,12 @@ export interface Survey {
   link_publico: string;
   configuracoes: SurveySettings;
   criado_por?: string;
+  // Contadores já calculados pelo backend (action=getSurveys / getDashboardData),
+  // usados pela Lista de Pesquisas e pelo Dashboard sem precisar baixar as
+  // perguntas/respostas completas de todas as pesquisas. Opcionais para manter
+  // compatibilidade com respostas de versões antigas do Apps Script.
+  total_perguntas?: number;
+  total_respostas?: number;
 }
 
 export interface Question {
