@@ -2,6 +2,13 @@ import { AppUser, AuthSession } from '../types';
 import { AUTH_STORAGE_KEY, DEFAULT_GAS_WEB_APP_URL, GAS_STORAGE_KEY } from './config';
 
 /**
+ * Espera alguns milissegundos (usado entre tentativas de retry).
+ */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * Serviço de Autenticação do PesquisaHub.
  *
  * Fala diretamente com o Google Apps Script (mesmas ações de login, troca de senha
@@ -24,25 +31,58 @@ export class AuthService {
     return DEFAULT_GAS_WEB_APP_URL;
   }
 
-  private static async callGas(action: string, payload?: Record<string, any>): Promise<any> {
+  /**
+   * Chama o Apps Script com tentativas automáticas em caso de falha de rede ou
+   * resposta não-JSON (sinal de "cold start" do Apps Script depois de um tempo sem
+   * uso — a causa mais provável do erro que aparecia no primeiro login do dia).
+   *
+   * NÃO tentamos de novo quando o servidor respondeu normalmente com um erro de
+   * aplicação (ex: "e-mail ou senha inválidos") — isso já é uma resposta legítima,
+   * repetir a chamada não mudaria o resultado.
+   */
+  private static async callGas(action: string, payload?: Record<string, any>, retries = 2): Promise<any> {
     const url = this.getWebAppUrl();
     if (!url) throw new Error('Google Apps Script não configurado.');
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, ...payload })
-    });
+    let lastError: any;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action, ...payload })
+        });
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ao comunicar com o Google Apps Script.`);
-    }
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} ao comunicar com o Google Apps Script.`);
+        }
 
-    const result = await response.json();
-    if (result.status !== 'ok' && result.success !== true) {
-      throw new Error(result.message || 'Erro ao processar a solicitação.');
+        let result: any;
+        try {
+          result = await response.json();
+        } catch (parseErr) {
+          // Resposta 200 mas sem JSON válido — sinal típico de cold start devolvendo
+          // uma página de erro do Google em vez da API. Vale tentar de novo.
+          throw new Error('Resposta inesperada do servidor (não é JSON válido). Tentando novamente...');
+        }
+
+        if (result.status !== 'ok' && result.success !== true) {
+          // Erro de aplicação de verdade (ex: senha incorreta) — não é cold start,
+          // não adianta tentar de novo.
+          throw new Error(result.message || 'Erro ao processar a solicitação.');
+        }
+
+        return result;
+      } catch (err: any) {
+        lastError = err;
+        const isApplicationError = err && err.__isApplicationError;
+        if (isApplicationError || attempt >= retries) {
+          throw err;
+        }
+        await delay(900 * (attempt + 1));
+      }
     }
-    return result;
+    throw lastError;
   }
 
   // ==========================================
@@ -95,7 +135,7 @@ export class AuthService {
     this.clearSession();
     if (token) {
       try {
-        await this.callGas('logout', { token });
+        await this.callGas('logout', { token }, 0);
       } catch (e) {
         // Sessão local já foi limpa; falha ao avisar o servidor não é crítica.
       }
@@ -105,7 +145,7 @@ export class AuthService {
   public static async changePassword(novaSenha: string): Promise<void> {
     const token = this.getToken();
     if (!token) throw new Error('Você não está logado.');
-    await this.callGas('changePassword', { token, novaSenha });
+    await this.callGas('changePassword', { token, novaSenha }, 1);
 
     // Atualizar a sessão local para refletir que a senha não precisa mais ser trocada
     const session = this.getSession();
@@ -134,20 +174,20 @@ export class AuthService {
   public static async createUser(nome: string, email: string, role: 'admin' | 'user'): Promise<{ tempPassword: string; message: string }> {
     const token = this.getToken();
     if (!token) throw new Error('Você não está logado.');
-    const result = await this.callGas('createUser', { token, usuario: { nome, email, role } });
+    const result = await this.callGas('createUser', { token, usuario: { nome, email, role } }, 1);
     return { tempPassword: result.data.tempPassword, message: result.message };
   }
 
   public static async resetPassword(userId: string): Promise<{ tempPassword: string; message: string }> {
     const token = this.getToken();
     if (!token) throw new Error('Você não está logado.');
-    const result = await this.callGas('resetPassword', { token, userId });
+    const result = await this.callGas('resetPassword', { token, userId }, 1);
     return { tempPassword: result.data.tempPassword, message: result.message };
   }
 
   public static async toggleUserActive(userId: string, ativo: boolean): Promise<void> {
     const token = this.getToken();
     if (!token) throw new Error('Você não está logado.');
-    await this.callGas('toggleUserActive', { token, userId, ativo });
+    await this.callGas('toggleUserActive', { token, userId, ativo }, 1);
   }
 }
