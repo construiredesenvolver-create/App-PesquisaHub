@@ -222,7 +222,15 @@ export const SurveyList: React.FC<SurveyListProps> = ({
       ) : (
         <div className="grid grid-cols-1 gap-4">
           {filteredSurveys.map((survey) => {
-            const surveyQuestions = questions.filter((q) => q.survey_id === survey.id);
+            // A partir da v1.4, a lista de pesquisas já vem com os contadores prontos
+            // do backend (survey.total_perguntas / survey.total_respostas), então não
+            // dependemos mais do array global `questions` (que só é carregado por
+            // completo quando essa pesquisa específica é aberta). Mantemos o filtro
+            // como reserva, caso o Apps Script ainda esteja numa versão antiga que
+            // não devolve esses contadores.
+            const surveyQuestionsCount = typeof survey.total_perguntas === 'number'
+              ? survey.total_perguntas
+              : questions.filter((q) => q.survey_id === survey.id).length;
             const surveyRespondents = respondents.filter((r) => r.survey_id === survey.id);
             const normalized = normalizeStatus(survey.status);
             const isPublished = normalized === 'Publicada';
@@ -280,7 +288,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                   {/* Summary Metrics */}
                   <div className="flex items-center gap-4 text-xs text-slate-500 pt-1">
                     <span className="flex items-center gap-1 font-medium">
-                      <strong className="text-slate-900">{surveyQuestions.length}</strong> {surveyQuestions.length === 1 ? 'pergunta' : 'perguntas'}
+                      <strong className="text-slate-900">{surveyQuestionsCount}</strong> {surveyQuestionsCount === 1 ? 'pergunta' : 'perguntas'}
                     </span>
                     <span>•</span>
                     <span className="flex items-center gap-1 font-medium">
