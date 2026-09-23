@@ -52,7 +52,6 @@ export function extractCleanSurveySlug(surveyIdOrSlugOrUrl: string): string {
   if (!surveyIdOrSlugOrUrl) return '';
   let str = String(surveyIdOrSlugOrUrl).trim();
 
-  // Se for uma URL completa ou rota com /responder/
   if (str.includes('/responder/')) {
     const parts = str.split('/responder/');
     str = parts[parts.length - 1];
@@ -62,7 +61,6 @@ export function extractCleanSurveySlug(surveyIdOrSlugOrUrl: string): string {
     str = str.replace('#/responder-', '');
   }
 
-  // Limpar query params ou hashes extras
   str = str.split('?')[0].split('#')[0].replace(/^\/+|\/+$/g, '').trim();
   return str || 'pesquisa';
 }
@@ -75,7 +73,6 @@ export function generatePublicSurveyUrl(surveyIdOrSlug: string): string {
   const cleanId = extractCleanSurveySlug(surveyIdOrSlug);
   const publicUrl = `${baseUrl}/#/responder/${encodeURIComponent(cleanId)}`;
   
-  // Registro explícito no console para rastreabilidade
   console.log('[PesquisaHub Architecture] Public Survey URL (Sem 403):', publicUrl);
   console.log('[PesquisaHub Architecture] API URL (Backend):', APP_CONFIG.API_URL || '(Não configurada)');
   
@@ -105,10 +102,71 @@ export function generateId(prefix: 'srv' | 'q' | 'opt' | 'resp' | 'ans' | string
   return `${prefix}_${timestamp}_${randomEntropy}`;
 }
 
+/**
+ * Espera alguns milissegundos (usado entre tentativas de retry).
+ */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * fetch() com tentativas automáticas.
+ *
+ * Isso existe especificamente por causa do "erro 404 no primeiro login depois de um
+ * tempo sem usar": o Google Apps Script "dorme" o container depois de um período
+ * ocioso, e a primeira requisição depois disso às vezes falha (erro de rede, ou uma
+ * resposta que não é o JSON esperado) enquanto o Google reinicializa o script.
+ * A segunda tentativa, poucos instantes depois, quase sempre funciona.
+ *
+ * Importante: só fazemos retry quando o fetch falhou de fato (erro de rede/timeout)
+ * ou quando a resposta não veio como JSON válido (sinal clássico de cold start
+ * devolvendo uma página de erro do Google em vez da API). Se o servidor respondeu
+ * com um JSON de erro de verdade (ex: "e-mail ou senha inválidos"), NÃO tentamos de
+ * novo — isso já é uma resposta legítima da aplicação.
+ */
+async function fetchJsonWithRetry(
+  url: string,
+  options: RequestInit = {},
+  retries = 2,
+  backoffMs = 900
+): Promise<any> {
+  let lastError: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        // Erro HTTP "de verdade" (o servidor respondeu, só que com status de erro).
+        // Isso não costuma ser cold start — não vale a pena tentar de novo.
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      try {
+        return await response.json();
+      } catch (parseErr) {
+        // Resposta 200 mas sem JSON válido: sinal típico de cold start do Apps
+        // Script devolvendo uma página HTML de erro. Vale tentar de novo.
+        throw new Error('Resposta inesperada do servidor (não é JSON válido).');
+      }
+    } catch (err) {
+      lastError = err;
+      if (attempt < retries) {
+        await delay(backoffMs * (attempt + 1));
+        continue;
+      }
+    }
+  }
+  throw lastError;
+}
+
 export class ApiService {
   private static isInitialized = false;
 
-  // Estado em memória (alimentado em tempo real pelo Google Sheets)
+  // Estado em memória (alimentado em tempo real pelo Google Sheets).
+  // A partir da v1.4, esses arrays são preenchidos de forma incremental:
+  // - `surveys` e `respondents` vêm do endpoint leve (getDashboardData) na maior
+  //   parte do tempo.
+  // - `questions`, `options` e `answers` só chegam quando uma pesquisa específica
+  //   é aberta (fetchSurveyDetail), em vez de baixar tudo de todas as pesquisas
+  //   sempre que qualquer tela é aberta.
   private static surveys: Survey[] = [];
   private static questions: Question[] = [];
   private static options: Option[] = [];
@@ -199,19 +257,13 @@ export class ApiService {
 
       console.log('[API] Testando conectividade com Google Apps Script:', pingUrl);
 
-      const response = await fetch(pingUrl, {
+      const data = await fetchJsonWithRetry(pingUrl, {
         method: 'GET',
         mode: 'cors',
         headers: { 'Accept': 'application/json' }
       });
 
       const latency = Math.round(performance.now() - startTime);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json();
       console.log('[API] Resposta do teste de conexão:', data);
 
       if (data.status === 'ok' || data.success) {
@@ -223,7 +275,7 @@ export class ApiService {
           success: true,
           latencyMs: latency,
           timestamp: data.timestamp || new Date().toISOString(),
-          version: data.version || '1.2.0',
+          version: data.version || '1.4.0',
           message: 'Google Apps Script conectado com sucesso ao Google Sheets!'
         };
       } else {
@@ -278,40 +330,34 @@ export class ApiService {
 
     const startTime = performance.now();
     try {
-      // 1. Tentar action=getAllData
       const url = targetUrl.includes('?') 
         ? `${targetUrl}&action=getAllData&_t=${Date.now()}` 
         : `${targetUrl}?action=getAllData&_t=${Date.now()}`;
 
       console.log('[API] Teste isolado - Buscando pesquisas via getAllData:', url);
 
-      let response = await fetch(url, {
+      let json = await fetchJsonWithRetry(url, {
         method: 'GET',
         mode: 'cors',
         headers: { 'Accept': 'application/json' }
       });
-
-      let json = await response.json();
       console.log('[API] Teste isolado - Resposta inicial:', json);
 
-      // Se o script retornar erro de ação desconhecida, tentar fallback para action=getSurveys
       if (json.status === 'error' && String(json.message || '').includes('desconhecida')) {
         console.log('[API] action=getAllData não suportada na versão atual do Apps Script. Tentando fallback para action=getSurveys...');
         const fallbackUrl = targetUrl.includes('?') 
           ? `${targetUrl}&action=getSurveys&_t=${Date.now()}` 
           : `${targetUrl}?action=getSurveys&_t=${Date.now()}`;
         
-        response = await fetch(fallbackUrl, {
+        json = await fetchJsonWithRetry(fallbackUrl, {
           method: 'GET',
           mode: 'cors',
           headers: { 'Accept': 'application/json' }
         });
-        json = await response.json();
         console.log('[API] Teste isolado - Resposta via fallback getSurveys:', json);
       }
 
       const latencyMs = Math.round(performance.now() - startTime);
-      const httpStatus = response.status;
 
       const surveysList = (json.data && json.data.surveys) || json.surveys || (Array.isArray(json.data) ? json.data : []);
       const count = Array.isArray(surveysList) ? surveysList.length : 0;
@@ -320,7 +366,7 @@ export class ApiService {
 
       return {
         success: isSuccess,
-        httpStatus,
+        httpStatus: 200,
         surveysCount: count,
         rawResponse: json,
         message: isSuccess 
@@ -342,12 +388,178 @@ export class ApiService {
   }
 
   // ==========================================
-  // SINCRONIZAÇÃO COMPLETA COM GOOGLE SHEETS
+  // SINCRONIZAÇÃO LEVE (DASHBOARD / LISTA DE PESQUISAS)
   // ==========================================
 
   /**
-   * Carrega todos os dados do banco de dados do Google Sheets.
-   * Suporta nativamente tanto a versão moderna (action=getAllData) quanto a versão clássica (action=getSurveys + getSurvey).
+   * Carrega apenas o necessário para o Dashboard e a Lista de Pesquisas: as
+   * pesquisas (já com contadores de perguntas/respostas prontos) e os respondentes
+   * (só nome/data, sem as respostas de texto). MUITO mais leve que
+   * fetchAllDataFromSheets() — é o que deve ser chamado ao abrir o app e depois de
+   * qualquer ação de escrita (criar, publicar, excluir, duplicar).
+   */
+  public static async fetchDashboardDataFromSheets(): Promise<{
+    success: boolean;
+    data?: { surveys: Survey[]; respondents: Respondent[] };
+    message?: string;
+  }> {
+    this.init();
+    const config = this.getGasConfig();
+
+    if (!config.webAppUrl) {
+      this.lastError = 'Google Apps Script não configurado.';
+      return {
+        success: false,
+        message: 'URL do Google Apps Script ainda não configurada nas Configurações.'
+      };
+    }
+
+    try {
+      const token = AuthService.getToken();
+      const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+      const url = config.webAppUrl.includes('?')
+        ? `${config.webAppUrl}&action=getDashboardData&_t=${Date.now()}${tokenParam}`
+        : `${config.webAppUrl}?action=getDashboardData&_t=${Date.now()}${tokenParam}`;
+
+      const result = await fetchJsonWithRetry(url, {
+        method: 'GET',
+        mode: 'cors',
+        headers: { 'Accept': 'application/json' }
+      });
+
+      if ((result.status === 'ok' || result.success) && result.data) {
+        const surveys = this.normalizeSurveys(result.data.surveys || []);
+        const respondents = this.normalizeRespondents(result.data.respondents || []);
+
+        this.surveys = surveys;
+        this.respondents = respondents;
+        this.saveGasConfig({ isConnected: true, lastSync: new Date().toISOString() });
+        this.lastError = null;
+
+        return { success: true, data: { surveys, respondents } };
+      }
+
+      // Compatibilidade: Apps Script antigo (sem action=getDashboardData) — cai para
+      // a busca leve de pesquisas e, se preciso, para o modo completo antigo.
+      const isUnrecognizedAction = result.status === 'error' && (
+        String(result.message || '').toLowerCase().includes('desconhecida') ||
+        String(result.message || '').includes('getDashboardData')
+      );
+
+      if (isUnrecognizedAction) {
+        console.warn('[API] action=getDashboardData não reconhecida — Apps Script desatualizado. Atualize o Code.gs para a versão 1.4+. Usando fallback completo por enquanto.');
+        const legacy = await this.fetchAllDataFromSheets();
+        if (legacy.success && legacy.data) {
+          return { success: true, data: { surveys: legacy.data.surveys, respondents: legacy.data.respondents } };
+        }
+        return { success: false, message: legacy.message };
+      }
+
+      const errMsg = result.message || 'Erro ao carregar dados do painel.';
+      this.lastError = errMsg;
+      return { success: false, message: errMsg };
+    } catch (err: any) {
+      this.lastError = err.message || 'Falha de comunicação com o Google Apps Script.';
+      this.saveGasConfig({ isConnected: false });
+      return { success: false, message: this.lastError || undefined };
+    }
+  }
+
+  /**
+   * Carrega perguntas, opções, respondentes e respostas de UMA pesquisa específica
+   * (sob demanda), em vez de baixar os dados de todas as pesquisas. Chame ao abrir
+   * a tela de Analytics ou o Builder para editar uma pesquisa existente.
+   *
+   * Os resultados são mesclados no cache em memória (substituindo qualquer versão
+   * anterior desta mesma pesquisa) e os arrays completos e atualizados são
+   * devolvidos, prontos para alimentar o estado do React.
+   */
+  public static async fetchSurveyDetail(surveyId: string): Promise<{
+    success: boolean;
+    questions: Question[];
+    options: Option[];
+    respondents: Respondent[];
+    answers: Answer[];
+    message?: string;
+  }> {
+    const config = this.getGasConfig();
+    if (!config.webAppUrl) {
+      return {
+        success: false,
+        questions: this.questions,
+        options: this.options,
+        respondents: this.respondents,
+        answers: this.answers,
+        message: 'Google Apps Script não configurado.'
+      };
+    }
+
+    const token = AuthService.getToken();
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+
+    try {
+      const detailUrl = config.webAppUrl.includes('?')
+        ? `${config.webAppUrl}&action=getSurvey&id=${encodeURIComponent(surveyId)}&_t=${Date.now()}${tokenParam}`
+        : `${config.webAppUrl}?action=getSurvey&id=${encodeURIComponent(surveyId)}&_t=${Date.now()}${tokenParam}`;
+      const responsesUrl = config.webAppUrl.includes('?')
+        ? `${config.webAppUrl}&action=getResponses&id=${encodeURIComponent(surveyId)}&_t=${Date.now()}${tokenParam}`
+        : `${config.webAppUrl}?action=getResponses&id=${encodeURIComponent(surveyId)}&_t=${Date.now()}${tokenParam}`;
+
+      const [detailResult, responsesResult] = await Promise.all([
+        fetchJsonWithRetry(detailUrl, { headers: { 'Accept': 'application/json' } }),
+        fetchJsonWithRetry(responsesUrl, { headers: { 'Accept': 'application/json' } })
+      ]);
+
+      const rawQuestions: any[] = (detailResult.data && detailResult.data.questions) || detailResult.questions || [];
+      const rawOptions: any[] = (detailResult.data && detailResult.data.options) || detailResult.options || [];
+      const respData = responsesResult.data || responsesResult;
+      const rawRespondents: any[] = (respData && respData.respondents) || [];
+      const rawAnswers: any[] = (respData && respData.answers) || [];
+
+      const freshQuestions = this.normalizeQuestions(rawQuestions);
+      const freshOptions = this.normalizeOptions(rawOptions);
+      const freshRespondents = this.normalizeRespondents(rawRespondents);
+      const freshAnswers = this.normalizeAnswers(rawAnswers);
+
+      // Substitui, no cache em memória, apenas os dados desta pesquisa — preserva
+      // o que já estiver carregado de outras pesquisas visitadas anteriormente.
+      this.questions = [...this.questions.filter((q) => q.survey_id !== surveyId), ...freshQuestions];
+      this.options = [...this.options.filter((o) => !freshQuestions.some((q) => q.id === o.question_id) && !this.questions.some((q) => q.survey_id === surveyId && q.id === o.question_id)), ...freshOptions];
+      this.respondents = [...this.respondents.filter((r) => r.survey_id !== surveyId), ...freshRespondents];
+      this.answers = [...this.answers.filter((a) => a.survey_id !== surveyId), ...freshAnswers];
+
+      this.lastError = null;
+
+      return {
+        success: true,
+        questions: this.questions,
+        options: this.options,
+        respondents: this.respondents,
+        answers: this.answers
+      };
+    } catch (err: any) {
+      this.lastError = err.message || 'Falha ao carregar os detalhes da pesquisa.';
+      return {
+        success: false,
+        questions: this.questions,
+        options: this.options,
+        respondents: this.respondents,
+        answers: this.answers,
+        message: this.lastError || undefined
+      };
+    }
+  }
+
+  // ==========================================
+  // SINCRONIZAÇÃO COMPLETA (LEGADO / MANUAL)
+  // ==========================================
+
+  /**
+   * Carrega TODOS os dados do banco de dados do Google Sheets de uma vez (todas as
+   * pesquisas, perguntas, opções, respondentes e respostas). Pesada — mantida para
+   * compatibilidade com Apps Script antigo (sem getDashboardData) e para um botão
+   * de "sincronização completa" manual, se necessário. No dia a dia, prefira
+   * fetchDashboardDataFromSheets() + fetchSurveyDetail().
    */
   public static async fetchAllDataFromSheets(): Promise<{
     success: boolean;
@@ -375,32 +587,23 @@ export class ApiService {
     try {
       console.log('[API] Buscando pesquisas e dados completos do Google Sheets...');
       
-      // Tentativa 1: Endpoint completo action=getAllData (v1.2+)
       const token = AuthService.getToken();
       const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
       const url = config.webAppUrl.includes('?') 
         ? `${config.webAppUrl}&action=getAllData&_t=${Date.now()}${tokenParam}` 
         : `${config.webAppUrl}?action=getAllData&_t=${Date.now()}${tokenParam}`;
 
-      const response = await fetch(url, {
+      const result = await fetchJsonWithRetry(url, {
         method: 'GET',
         mode: 'cors',
         headers: { 'Accept': 'application/json' }
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status} ao carregar dados do Sheets: ${response.statusText}`);
-      }
-
-      const result = await response.json();
       console.log('[API] Resposta recebida do Google Apps Script (tentativa getAllData):', result);
 
-      // Se retornou com sucesso com a estrutura completa
       if ((result.status === 'ok' || result.success) && result.data && (result.data.surveys || Array.isArray(result.data))) {
         return this.processFullDatabasePayload(result.data);
       }
 
-      // Se retornou erro de ação desconhecida ou não suportada (versões anteriores do Apps Script)
       const isUnrecognizedAction = result.status === 'error' && (
         String(result.message || '').toLowerCase().includes('desconhecida') ||
         String(result.message || '').toLowerCase().includes('não suportada') ||
@@ -412,7 +615,6 @@ export class ApiService {
         return await this.fetchViaCompatibilityMode(config.webAppUrl);
       }
 
-      // Se foi outro tipo de erro
       const errMsg = result.message || 'Erro ao processar dados da planilha Google Sheets.';
       this.lastError = errMsg;
       console.error('[API] Erro retornado pelo Google Apps Script:', errMsg);
@@ -423,7 +625,6 @@ export class ApiService {
 
     } catch (err: any) {
       console.warn('[API] Falha inicial ao tentar getAllData, tentando fallback:', err);
-      // Tentativa de recuperação via compatibility mode antes de desistir
       try {
         if (config.webAppUrl) {
           return await this.fetchViaCompatibilityMode(config.webAppUrl);
@@ -441,27 +642,8 @@ export class ApiService {
     }
   }
 
-  /**
-   * Processa e normaliza o payload completo do banco de dados (surveys, questions, options, respondents, answers).
-   */
-  private static processFullDatabasePayload(data: any): {
-    success: boolean;
-    data: {
-      surveys: Survey[];
-      questions: Question[];
-      options: Option[];
-      respondents: Respondent[];
-      answers: Answer[];
-    };
-  } {
-    const rawSurveys: any[] = data.surveys || (Array.isArray(data) ? data : []);
-    const rawQuestions: any[] = data.questions || [];
-    const rawOptions: any[] = data.options || [];
-    const rawRespondents: any[] = data.respondents || [];
-    const rawAnswers: any[] = data.answers || [];
-
-    // Normalização e Saneamento de Surveys
-    this.surveys = rawSurveys.map((s) => {
+  private static normalizeSurveys(rawSurveys: any[]): Survey[] {
+    return rawSurveys.map((s) => {
       let status: SurveyStatus = 'Rascunho';
       const sLower = String(s.status || '').toLowerCase();
       if (sLower === 'publicada' || sLower === 'published') status = 'Publicada';
@@ -481,13 +663,16 @@ export class ApiService {
         configuracoes: typeof s.configuracoes === 'object' && s.configuracoes !== null
           ? s.configuracoes
           : { exigir_nome: true, permitir_anonimo: false, permitir_multiplas_respostas: false },
-        criado_por: s.criado_por ? String(s.criado_por) : undefined
-      };
+        criado_por: s.criado_por ? String(s.criado_por) : undefined,
+        total_perguntas: typeof s.total_perguntas === 'number' ? s.total_perguntas : undefined,
+        total_respostas: typeof s.total_respostas === 'number' ? s.total_respostas : undefined
+      } as Survey;
     });
+  }
 
-    // Saneamento de Questions
+  private static normalizeQuestions(rawQuestions: any[]): Question[] {
     const seenQuestionIds = new Set<string>();
-    this.questions = rawQuestions.map((q, qIndex) => {
+    return rawQuestions.map((q, qIndex) => {
       let qId = String(q.id);
       if (!qId || seenQuestionIds.has(qId)) {
         qId = `${q.survey_id || 'q'}_fix_${qIndex + 1}_${Math.random().toString(36).substring(2, 6)}`;
@@ -505,10 +690,11 @@ export class ApiService {
         ativa: q.ativa !== false
       };
     });
+  }
 
-    // Saneamento de Options
+  private static normalizeOptions(rawOptions: any[]): Option[] {
     const seenOptionIds = new Set<string>();
-    this.options = rawOptions.map((opt, optIndex) => {
+    return rawOptions.map((opt, optIndex) => {
       let optId = String(opt.id);
       if (!optId || seenOptionIds.has(optId)) {
         optId = `${opt.question_id || 'opt'}_fix_${optIndex + 1}_${Math.random().toString(36).substring(2, 6)}`;
@@ -524,9 +710,10 @@ export class ApiService {
         peso: opt.peso ? Number(opt.peso) : undefined
       };
     });
+  }
 
-    // Respondents e Answers
-    this.respondents = rawRespondents.map((r) => ({
+  private static normalizeRespondents(rawRespondents: any[]): Respondent[] {
+    return rawRespondents.map((r) => ({
       id: String(r.id),
       survey_id: String(r.survey_id),
       nome: String(r.nome || 'Respondente Anônimo'),
@@ -534,8 +721,10 @@ export class ApiService {
       data_resposta: String(r.data_resposta || ''),
       hora_resposta: String(r.hora_resposta || '')
     }));
+  }
 
-    this.answers = rawAnswers.map((a) => ({
+  private static normalizeAnswers(rawAnswers: any[]): Answer[] {
+    return rawAnswers.map((a) => ({
       id: String(a.id),
       survey_id: String(a.survey_id),
       respondent_id: String(a.respondent_id),
@@ -544,6 +733,28 @@ export class ApiService {
       valor: String(a.valor || ''),
       data_resposta: String(a.data_resposta || '')
     }));
+  }
+
+  /**
+   * Processa e normaliza o payload completo do banco de dados (surveys, questions, options, respondents, answers).
+   */
+  private static processFullDatabasePayload(data: any): {
+    success: boolean;
+    data: {
+      surveys: Survey[];
+      questions: Question[];
+      options: Option[];
+      respondents: Respondent[];
+      answers: Answer[];
+    };
+  } {
+    const rawSurveys: any[] = data.surveys || (Array.isArray(data) ? data : []);
+
+    this.surveys = this.normalizeSurveys(rawSurveys);
+    this.questions = this.normalizeQuestions(data.questions || []);
+    this.options = this.normalizeOptions(data.options || []);
+    this.respondents = this.normalizeRespondents(data.respondents || []);
+    this.answers = this.normalizeAnswers(data.answers || []);
 
     this.saveGasConfig({ isConnected: true, lastSync: new Date().toISOString() });
     this.lastError = null;
@@ -581,55 +792,24 @@ export class ApiService {
       ? `${webAppUrl}&action=getSurveys&_t=${Date.now()}`
       : `${webAppUrl}?action=getSurveys&_t=${Date.now()}`;
 
-    const response = await fetch(url, {
+    const result = await fetchJsonWithRetry(url, {
       method: 'GET',
       mode: 'cors',
       headers: { 'Accept': 'application/json' }
     });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ao carregar pesquisas no modo de compatibilidade.`);
-    }
-
-    const result = await response.json();
     console.log('[API] Resposta recebida de getSurveys:', result);
 
-    const rawSurveys: any[] = (result.data && Array.isArray(result.data)) 
+    const rawSurveysList: any[] = (result.data && Array.isArray(result.data)) 
       ? result.data 
       : (result.surveys || (Array.isArray(result) ? result : []));
 
-    if (!Array.isArray(rawSurveys)) {
+    if (!Array.isArray(rawSurveysList)) {
       throw new Error(result.message || 'Estrutura de pesquisas inválida retornada pelo Apps Script.');
     }
 
-    // Normalizar surveys
-    const surveys: Survey[] = rawSurveys.map((s) => {
-      let status: SurveyStatus = 'Rascunho';
-      const sLower = String(s.status || '').toLowerCase();
-      if (sLower === 'publicada' || sLower === 'published') status = 'Publicada';
-      else if (sLower === 'encerrada' || sLower === 'closed') status = 'Encerrada';
-      else if (sLower === 'arquivada' || sLower === 'archived') status = 'Arquivada';
-      else status = 'Rascunho';
-
-      return {
-        id: String(s.id),
-        titulo: String(s.titulo || 'Pesquisa sem título'),
-        descricao: String(s.descricao || ''),
-        status,
-        data_criacao: String(s.data_criacao || ''),
-        data_inicio: s.data_inicio ? String(s.data_inicio) : undefined,
-        data_fim: s.data_fim ? String(s.data_fim) : undefined,
-        link_publico: String(s.link_publico || s.id),
-        configuracoes: typeof s.configuracoes === 'object' && s.configuracoes !== null
-          ? s.configuracoes
-          : { exigir_nome: true, permitir_anonimo: false, permitir_multiplas_respostas: false },
-        criado_por: s.criado_por ? String(s.criado_por) : undefined
-      };
-    });
-
+    const surveys = this.normalizeSurveys(rawSurveysList);
     this.surveys = surveys;
 
-    // Se não há pesquisas, definir arrays vazios e retornar sucesso
     if (surveys.length === 0) {
       this.questions = [];
       this.options = [];
@@ -639,17 +819,10 @@ export class ApiService {
       this.lastError = null;
       return {
         success: true,
-        data: {
-          surveys: [],
-          questions: [],
-          options: [],
-          respondents: [],
-          answers: []
-        }
+        data: { surveys: [], questions: [], options: [], respondents: [], answers: [] }
       };
     }
 
-    // Carregar detalhes (Perguntas, Opções, Respondentes) para cada pesquisa em paralelo
     const allQuestions: Question[] = [];
     const allOptions: Option[] = [];
     const allRespondents: Respondent[] = [];
@@ -657,79 +830,32 @@ export class ApiService {
 
     const detailPromises = surveys.map(async (survey) => {
       try {
-        // 1. Buscar perguntas e opções
         const surveyDetailUrl = webAppUrl.includes('?')
           ? `${webAppUrl}&action=getSurvey&id=${encodeURIComponent(survey.id)}&_t=${Date.now()}`
           : `${webAppUrl}?action=getSurvey&id=${encodeURIComponent(survey.id)}&_t=${Date.now()}`;
-        
-        const detailRes = await fetch(surveyDetailUrl, { headers: { 'Accept': 'application/json' } });
-        if (detailRes.ok) {
-          const detailJson = await detailRes.json();
-          if (detailJson.data) {
-            if (Array.isArray(detailJson.data.questions)) {
-              detailJson.data.questions.forEach((q: any) => {
-                allQuestions.push({
-                  id: String(q.id),
-                  survey_id: String(q.survey_id || survey.id),
-                  ordem: Number(q.ordem) || 1,
-                  titulo: String(q.titulo || ''),
-                  descricao: q.descricao ? String(q.descricao) : undefined,
-                  tipo: q.tipo || 'single_choice',
-                  obrigatoria: Boolean(q.obrigatoria),
-                  ativa: q.ativa !== false
-                });
-              });
-            }
-            if (Array.isArray(detailJson.data.options)) {
-              detailJson.data.options.forEach((opt: any) => {
-                allOptions.push({
-                  id: String(opt.id),
-                  question_id: String(opt.question_id),
-                  ordem: Number(opt.ordem) || 1,
-                  texto: String(opt.texto || ''),
-                  valor: String(opt.valor || opt.texto || ''),
-                  peso: opt.peso ? Number(opt.peso) : undefined
-                });
-              });
-            }
+
+        const detailJson = await fetchJsonWithRetry(surveyDetailUrl, { headers: { 'Accept': 'application/json' } }, 1);
+        if (detailJson.data) {
+          if (Array.isArray(detailJson.data.questions)) {
+            allQuestions.push(...this.normalizeQuestions(detailJson.data.questions));
+          }
+          if (Array.isArray(detailJson.data.options)) {
+            allOptions.push(...this.normalizeOptions(detailJson.data.options));
           }
         }
 
-        // 2. Buscar respostas/respondentes
         const responsesUrl = webAppUrl.includes('?')
           ? `${webAppUrl}&action=getResponses&id=${encodeURIComponent(survey.id)}&_t=${Date.now()}`
           : `${webAppUrl}?action=getResponses&id=${encodeURIComponent(survey.id)}&_t=${Date.now()}`;
-        
-        const respRes = await fetch(responsesUrl, { headers: { 'Accept': 'application/json' } });
-        if (respRes.ok) {
-          const respJson = await respRes.json();
-          const respData = respJson.data || respJson;
-          if (respData) {
-            if (Array.isArray(respData.respondents)) {
-              respData.respondents.forEach((r: any) => {
-                allRespondents.push({
-                  id: String(r.id),
-                  survey_id: String(r.survey_id || survey.id),
-                  nome: String(r.nome || 'Respondente'),
-                  identificador: r.identificador ? String(r.identificador) : undefined,
-                  data_resposta: String(r.data_resposta || ''),
-                  hora_resposta: String(r.hora_resposta || '')
-                });
-              });
-            }
-            if (Array.isArray(respData.answers)) {
-              respData.answers.forEach((a: any) => {
-                allAnswers.push({
-                  id: String(a.id),
-                  survey_id: String(a.survey_id || survey.id),
-                  respondent_id: String(a.respondent_id),
-                  question_id: String(a.question_id),
-                  option_id: a.option_id ? String(a.option_id) : undefined,
-                  valor: String(a.valor || ''),
-                  data_resposta: String(a.data_resposta || '')
-                });
-              });
-            }
+
+        const respJson = await fetchJsonWithRetry(responsesUrl, { headers: { 'Accept': 'application/json' } }, 1);
+        const respData = respJson.data || respJson;
+        if (respData) {
+          if (Array.isArray(respData.respondents)) {
+            allRespondents.push(...this.normalizeRespondents(respData.respondents));
+          }
+          if (Array.isArray(respData.answers)) {
+            allAnswers.push(...this.normalizeAnswers(respData.answers));
           }
         }
       } catch (err) {
@@ -808,7 +934,6 @@ export class ApiService {
   } | null> {
     const cleanId = encodeURIComponent(surveyIdOrSlug.trim());
 
-    // 1. Tentar intermediador seguro do backend PesquisaHub (/api/public/survey/:id)
     try {
       const serverRes = await fetch(`/api/public/survey/${cleanId}`);
       if (serverRes.ok) {
@@ -843,7 +968,6 @@ export class ApiService {
       console.warn('[API] Backend PesquisaHub indisponível para consulta pública, tentando fallback direto:', e);
     }
 
-    // 2. Fallback: Se temos a URL do Apps Script no cliente, buscar online diretamente da planilha
     const config = this.getGasConfig();
     if (config.webAppUrl) {
       try {
@@ -852,50 +976,45 @@ export class ApiService {
           : `${config.webAppUrl}?action=getSurvey&id=${cleanId}&_t=${Date.now()}`;
 
         console.log(`[API] Buscando pesquisa pública "${surveyIdOrSlug}" no Google Sheets...`);
-        const response = await fetch(url, {
+        const result = await fetchJsonWithRetry(url, {
           method: 'GET',
           mode: 'cors',
           headers: { 'Accept': 'application/json' }
         });
 
-        if (response.ok) {
-          const result = await response.json();
-          if ((result.status === 'ok' || result.success) && result.data && result.data.survey) {
-            const { survey, questions, options } = result.data;
-            
-            // Atualizar estado em memória
-            const existingIdx = this.surveys.findIndex((s) => s.id === survey.id);
-            if (existingIdx >= 0) {
-              this.surveys[existingIdx] = survey;
-            } else {
-              this.surveys.push(survey);
-            }
+        if ((result.status === 'ok' || result.success) && result.data && result.data.survey) {
+          const { survey, questions, options } = result.data;
 
-            if (questions && questions.length > 0) {
-              questions.forEach((q: Question) => {
-                const qIdx = this.questions.findIndex((existingQ) => existingQ.id === q.id);
-                if (qIdx >= 0) this.questions[qIdx] = q;
-                else this.questions.push(q);
-              });
-            }
-
-            if (options && options.length > 0) {
-              options.forEach((opt: Option) => {
-                const optIdx = this.options.findIndex((existingOpt) => existingOpt.id === opt.id);
-                if (optIdx >= 0) this.options[optIdx] = opt;
-                else this.options.push(opt);
-              });
-            }
-
-            return { survey, questions, options };
+          const existingIdx = this.surveys.findIndex((s) => s.id === survey.id);
+          if (existingIdx >= 0) {
+            this.surveys[existingIdx] = survey;
+          } else {
+            this.surveys.push(survey);
           }
+
+          if (questions && questions.length > 0) {
+            questions.forEach((q: Question) => {
+              const qIdx = this.questions.findIndex((existingQ) => existingQ.id === q.id);
+              if (qIdx >= 0) this.questions[qIdx] = q;
+              else this.questions.push(q);
+            });
+          }
+
+          if (options && options.length > 0) {
+            options.forEach((opt: Option) => {
+              const optIdx = this.options.findIndex((existingOpt) => existingOpt.id === opt.id);
+              if (optIdx >= 0) this.options[optIdx] = opt;
+              else this.options.push(opt);
+            });
+          }
+
+          return { survey, questions, options };
         }
       } catch (e) {
         console.warn('[API] Erro ao buscar pesquisa pública online, verificando memória local:', e);
       }
     }
 
-    // Fallback para estado em memória local
     return this.getSurvey(surveyIdOrSlug);
   }
 
@@ -922,7 +1041,6 @@ export class ApiService {
     const newOptions: Option[] = [];
 
     questionsData.forEach((qData, qIndex) => {
-      // ID Único por pergunta: q_srv_TIMESTAMP_RANDOM_INDEX
       const questionId = `${generateId('q')}_${qIndex + 1}`;
       const newQuestion: Question = {
         ...qData.question,
@@ -934,7 +1052,6 @@ export class ApiService {
       newQuestions.push(newQuestion);
 
       qData.options.forEach((optData, optIndex) => {
-        // ID Único por opção: opt_TIMESTAMP_RANDOM_INDEX
         const optionId = `${generateId('opt')}_${optIndex + 1}`;
         const newOption: Option = {
           ...optData,
@@ -947,17 +1064,15 @@ export class ApiService {
       });
     });
 
-    // Atualizar estado em memória antecipadamente
     this.surveys.unshift(newSurvey);
     this.questions.push(...newQuestions);
     this.options.push(...newOptions);
 
-    // Enviar e aguardar confirmação do Google Apps Script
     const config = this.getGasConfig();
     if (config.webAppUrl) {
       console.log(`[API] Enviando nova pesquisa "${newSurvey.titulo}" (${newSurvey.id}) com ${newQuestions.length} perguntas para o Google Sheets...`);
       try {
-        const response = await fetch(config.webAppUrl, {
+        const result = await fetchJsonWithRetry(config.webAppUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({
@@ -968,13 +1083,8 @@ export class ApiService {
               options: newOptions
             }
           })
-        });
+        }, 1); // só 1 retry: evita risco de criar a pesquisa duas vezes por uma resposta perdida
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status} ao salvar pesquisa: ${response.statusText}`);
-        }
-
-        const result = await response.json();
         console.log('[API] Resposta de createSurvey recebida:', result);
 
         if (result.status !== 'ok' && result.success !== true) {
@@ -982,7 +1092,7 @@ export class ApiService {
         }
       } catch (err: any) {
         console.error('[API] Falha ao enviar createSurvey para o Apps Script:', err);
-        throw err; // Repassar para que a interface informe ao usuário
+        throw err;
       }
     } else {
       console.warn('[API] Atenção: Google Apps Script não configurado. Pesquisa salva apenas na sessão atual.');
@@ -995,7 +1105,6 @@ export class ApiService {
    * Atualiza o status da pesquisa no Google Sheets ('Publicada', 'Rascunho', 'Encerrada', 'Arquivada').
    */
   public static async updateSurveyStatus(surveyId: string, newStatus: SurveyStatus): Promise<boolean> {
-    // 1. Atualizar localmente
     const survey = this.surveys.find((s) => s.id === surveyId);
     if (survey) {
       survey.status = newStatus;
@@ -1006,12 +1115,11 @@ export class ApiService {
       }
     }
 
-    // 2. Persistir no Google Sheets
     const config = this.getGasConfig();
     if (config.webAppUrl) {
       console.log(`[API] Atualizando status da pesquisa ${surveyId} para "${newStatus}" no Google Sheets...`);
       try {
-        const response = await fetch(config.webAppUrl, {
+        const result = await fetchJsonWithRetry(config.webAppUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({
@@ -1020,7 +1128,6 @@ export class ApiService {
             status: newStatus
           })
         });
-        const result = await response.json();
         console.log('[API] Resposta de updateSurveyStatus:', result);
         return result.status === 'ok' || result.success === true;
       } catch (err) {
@@ -1035,26 +1142,23 @@ export class ApiService {
    * Exclui a pesquisa e seus dados no Google Sheets.
    */
   public static async deleteSurvey(surveyId: string): Promise<boolean> {
-    // 1. Remover da memória local
     this.surveys = this.surveys.filter((s) => s.id !== surveyId);
     this.questions = this.questions.filter((q) => q.survey_id !== surveyId);
     this.respondents = this.respondents.filter((r) => r.survey_id !== surveyId);
     this.answers = this.answers.filter((a) => a.survey_id !== surveyId);
 
-    // 2. Persistir no Google Sheets
     const config = this.getGasConfig();
     if (config.webAppUrl) {
       console.log(`[API] Excluindo pesquisa ${surveyId} do Google Sheets...`);
       try {
-        const response = await fetch(config.webAppUrl, {
+        const result = await fetchJsonWithRetry(config.webAppUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({
             action: 'deleteSurvey',
             id: surveyId
           })
-        });
-        const result = await response.json();
+        }, 1); // exclusão: só 1 retry, para não repetir a chamada mais do que o necessário
         console.log('[API] Resposta de deleteSurvey:', result);
         return result.status === 'ok' || result.success === true;
       } catch (err) {
@@ -1067,6 +1171,8 @@ export class ApiService {
 
   /**
    * Duplica uma pesquisa existente criando um novo Rascunho com novos IDs únicos.
+   * Requer que a pesquisa original já esteja carregada em memória (use
+   * fetchSurveyDetail antes, se necessário).
    */
   public static async duplicateSurvey(surveyId: string): Promise<Survey | null> {
     const original = this.getSurvey(surveyId);
@@ -1160,7 +1266,6 @@ export class ApiService {
       }
     });
 
-    // Atualizar memória local
     this.respondents.push(newRespondent);
     this.answers.push(...newAnswers);
 
@@ -1191,12 +1296,15 @@ export class ApiService {
       console.warn('[API] Backend PesquisaHub indisponível para envio de resposta, tentando Apps Script direto:', e);
     }
 
-    // 2. Fallback: Enviar diretamente para o Google Apps Script se configurado no cliente
+    // 2. Fallback: Enviar diretamente para o Google Apps Script, com 1 retry (proteção
+    // de cold start) — sem exagerar no número de tentativas, para não arriscar
+    // gravar a mesma resposta duas vezes caso a primeira tentativa tenha de fato
+    // sido processada no servidor.
     const config = this.getGasConfig();
     if (config.webAppUrl) {
       console.log(`[API] Gravando resposta de "${respondentName}" na pesquisa ${surveyId} no Google Sheets...`);
       try {
-        const response = await fetch(config.webAppUrl, {
+        const result = await fetchJsonWithRetry(config.webAppUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({
@@ -1207,13 +1315,7 @@ export class ApiService {
               answers: newAnswers
             }
           })
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status} ao registrar resposta.`);
-        }
-
-        const result = await response.json();
+        }, 1);
         console.log('[API] Resposta de submitResponse recebida:', result);
 
         if (result.status === 'ok' || result.success) {
@@ -1246,10 +1348,6 @@ export class ApiService {
   // UPLOAD DE FOTOS (RESPOSTAS DO TIPO "FOTO")
   // ==========================================
 
-  /**
-   * Envia uma foto (já comprimida e em base64) para o Google Apps Script, que a
-   * salva no Google Drive e devolve uma URL pública para usar como valor da resposta.
-   */
   public static async uploadPhotoAnswer(
     surveyId: string,
     base64: string,
@@ -1260,7 +1358,7 @@ export class ApiService {
       throw new Error('Google Apps Script não configurado.');
     }
 
-    const response = await fetch(config.webAppUrl, {
+    const result = await fetchJsonWithRetry(config.webAppUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({
@@ -1269,13 +1367,8 @@ export class ApiService {
         mimeType,
         base64
       })
-    });
+    }, 1);
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ao enviar a foto.`);
-    }
-
-    const result = await response.json();
     if (result.status !== 'ok' && result.success !== true) {
       throw new Error(result.message || 'Não foi possível enviar a foto.');
     }
@@ -1286,10 +1379,6 @@ export class ApiService {
   // ANÁLISE DE SENTIMENTO COM IA (GEMINI)
   // ==========================================
 
-  /**
-   * Busca uma análise de sentimento já em cache (rápida, não chama a IA).
-   * Use antes de exibir a tela, para não deixar o usuário esperando à toa.
-   */
   public static async getSentimentAnalysis(
     surveyId: string,
     questionId: string
@@ -1300,19 +1389,17 @@ export class ApiService {
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
 
     const url = `${config.webAppUrl}?action=getSentimentAnalysis&survey_id=${encodeURIComponent(surveyId)}&question_id=${encodeURIComponent(questionId)}${tokenParam}`;
-    const response = await fetch(url);
-    if (!response.ok) return null;
-    const result = await response.json();
-    if ((result.status === 'ok' || result.success) && result.data) {
-      return result.data as SentimentAnalysisResult;
+    try {
+      const result = await fetchJsonWithRetry(url, {}, 1);
+      if ((result.status === 'ok' || result.success) && result.data) {
+        return result.data as SentimentAnalysisResult;
+      }
+      return null;
+    } catch (e) {
+      return null;
     }
-    return null;
   }
 
-  /**
-   * Dispara (ou atualiza) a análise de sentimento via IA para uma pergunta de texto livre.
-   * Só reprocessa de fato quando há respostas novas desde a última análise (economiza cota gratuita).
-   */
   public static async analyzeSentiment(
     surveyId: string,
     questionId: string
@@ -1324,7 +1411,7 @@ export class ApiService {
     const token = AuthService.getToken();
     if (!token) throw new Error('Você não está logado.');
 
-    const response = await fetch(config.webAppUrl, {
+    const result = await fetchJsonWithRetry(config.webAppUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({
@@ -1333,38 +1420,26 @@ export class ApiService {
         surveyId,
         questionId
       })
-    });
+    }, 0); // análise de IA não deve ser repetida automaticamente (evita gastar cota 2x)
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ao analisar sentimento.`);
-    }
-
-    const result = await response.json();
     if (result.status !== 'ok' && result.success !== true) {
       throw new Error(result.message || 'Não foi possível concluir a análise de sentimento.');
     }
     return result.data as SentimentAnalysisResult;
   }
 
-  /**
-   * Salva o contexto/instruções que a IA deve considerar sempre que analisar respostas
-   * de texto livre desta pesquisa (ex: jargões internos, situação da equipe na coleta).
-   * Passe uma string vazia para remover o contexto salvo.
-   */
   public static async updateSurveyContextoIA(surveyId: string, contextoIA: string): Promise<void> {
     const config = this.getGasConfig();
     if (!config.webAppUrl) throw new Error('Google Apps Script não configurado.');
     const token = AuthService.getToken();
     if (!token) throw new Error('Você não está logado.');
 
-    const response = await fetch(config.webAppUrl, {
+    const result = await fetchJsonWithRetry(config.webAppUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action: 'updateSurveyContextoIA', token, surveyId, contextoIA })
-    });
+    }, 1);
 
-    if (!response.ok) throw new Error(`HTTP ${response.status} ao salvar o contexto.`);
-    const result = await response.json();
     if (result.status !== 'ok' && result.success !== true) {
       throw new Error(result.message || 'Não foi possível salvar o contexto.');
     }
@@ -1374,19 +1449,13 @@ export class ApiService {
   // IDENTIDADE VISUAL (LOGO / MARCA)
   // ==========================================
 
-  /**
-   * Busca a logo e o nome de exibição configurados pelo administrador.
-   * Leitura pública — usada tanto no painel quanto no formulário público e no login.
-   */
   public static async getAppSettings(): Promise<AppSettings> {
     const fallback: AppSettings = { logoUrl: '', nomeExibicao: '' };
     const config = this.getGasConfig();
     if (!config.webAppUrl) return fallback;
 
     try {
-      const response = await fetch(`${config.webAppUrl}?action=getAppSettings&_t=${Date.now()}`);
-      if (!response.ok) return fallback;
-      const result = await response.json();
+      const result = await fetchJsonWithRetry(`${config.webAppUrl}?action=getAppSettings&_t=${Date.now()}`, {}, 1);
       if ((result.status === 'ok' || result.success) && result.data) {
         return { logoUrl: result.data.logoUrl || '', nomeExibicao: result.data.nomeExibicao || '' };
       }
@@ -1396,23 +1465,18 @@ export class ApiService {
     }
   }
 
-  /**
-   * Salva a logo e/ou o nome de exibição. Apenas o ADM pode alterar (validado no backend).
-   */
   public static async saveAppSettings(logoUrl?: string, nomeExibicao?: string): Promise<void> {
     const config = this.getGasConfig();
     if (!config.webAppUrl) throw new Error('Google Apps Script não configurado.');
     const token = AuthService.getToken();
     if (!token) throw new Error('Você não está logado.');
 
-    const response = await fetch(config.webAppUrl, {
+    const result = await fetchJsonWithRetry(config.webAppUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ action: 'saveAppSettings', token, logoUrl, nomeExibicao })
-    });
+    }, 1);
 
-    if (!response.ok) throw new Error(`HTTP ${response.status} ao salvar identidade visual.`);
-    const result = await response.json();
     if (result.status !== 'ok' && result.success !== true) {
       throw new Error(result.message || 'Não foi possível salvar a identidade visual.');
     }
