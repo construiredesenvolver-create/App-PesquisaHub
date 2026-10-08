@@ -98,13 +98,13 @@ export function App() {
           setGasConfig(ApiService.getGasConfig());
           setApiError(null);
         } else {
-          setApiError(result.message || 'Erro ao sincronizar com Google Sheets');
+          setApiError(result.message || 'Erro ao carregar os dados do banco');
           // Manter dados locais caso a API falhe temporariamente
           setSurveys(ApiService.getSurveys());
         }
       } catch (err: any) {
-        console.warn('Falha ao atualizar dados do Google Sheets:', err);
-        setApiError(err.message || 'Falha de comunicação com Google Sheets');
+        console.warn('Falha ao atualizar dados do banco:', err);
+        setApiError(err.message || 'Falha de comunicação com o servidor');
         setSurveys(ApiService.getSurveys());
       }
     } else {
@@ -149,8 +149,13 @@ export function App() {
     ApiService.getAppSettings().then(setAppSettings);
     // Só busca os dados administrativos se já houver um usuário logado
     // (pesquisas públicas de resposta não precisam de login e são carregadas à parte)
+    // Confere com o Supabase se a sessão salva ainda vale (e se o usuário segue ativo)
+    // antes de carregar os dados. Se não valer mais, volta para a tela de login.
     if (AuthService.getCurrentUser()) {
-      refreshDataFromSheets();
+      AuthService.validateSession().then((user) => {
+        setCurrentUser(user);
+        if (user) refreshDataFromSheets();
+      });
     }
 
     const handleUrlRouting = () => {
@@ -236,13 +241,13 @@ export function App() {
         };
         // Atualizar localmente e enviar status/dados
         await ApiService.updateSurveyStatus(updatedSurvey.id, updatedSurvey.status);
-        showToast(`Pesquisa "${updatedSurvey.titulo}" atualizada no Google Sheets!`);
+        showToast(`Pesquisa "${updatedSurvey.titulo}" atualizada!`);
       } else {
         const surveyDataComDono = { ...surveyData, criado_por: currentUser?.id || surveyData.criado_por };
         const newSurvey = await ApiService.createSurvey(surveyDataComDono, questionsData);
         // Atualizar imediatamente o estado de surveys para que apareça sem atraso
         setSurveys(ApiService.getSurveys());
-        showToast(`Pesquisa "${newSurvey.titulo}" criada com sucesso no Google Sheets!`);
+        showToast(`Pesquisa "${newSurvey.titulo}" criada com sucesso!`);
       }
 
       // Sincronizar em segundo plano (agora leve — só pesquisas + respondentes)
@@ -251,7 +256,7 @@ export function App() {
       setActiveTab('surveys');
     } catch (err: any) {
       console.error('Erro ao salvar pesquisa:', err);
-      showToast(`Erro ao gravar no Google Sheets: ${err.message || err}`);
+      showToast(`Erro ao gravar a pesquisa: ${err.message || err}`);
     } finally {
       setIsSavingSurvey(false);
     }
@@ -278,7 +283,7 @@ export function App() {
       await ApiService.updateSurveyStatus(surveyId, newStatus);
       setSurveys(ApiService.getSurveys());
       await refreshDataFromSheets();
-      showToast(`Status da pesquisa alterado para "${newStatus}" no Google Sheets.`);
+      showToast(`Status da pesquisa alterado para "${newStatus}".`);
     } catch (err: any) {
       showToast(`Erro ao atualizar status: ${err.message || err}`);
     }
