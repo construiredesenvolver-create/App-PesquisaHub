@@ -174,6 +174,14 @@ export const UsersView: React.FC = () => {
                     {u.deve_trocar_senha && (
                       <span className="ml-2 text-[11px] font-semibold text-amber-600">Aguardando 1º acesso</span>
                     )}
+                    {u.pedido_reset_em && (
+                      <span
+                        className="ml-2 text-[11px] font-semibold text-rose-600"
+                        title="Clique no botão de redefinir senha para gerar uma senha temporária"
+                      >
+                        Pediu nova senha
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-2">
