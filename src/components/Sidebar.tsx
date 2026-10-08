@@ -190,7 +190,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <div className="flex items-center gap-2.5">
                   <Settings className="w-4 h-4 text-slate-400" />
-                  <span>Google Sheets & API</span>
+                  <span>Configurações</span>
                 </div>
                 <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
               </button>
@@ -203,7 +203,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="rounded-xl bg-slate-800/60 border border-slate-700/50 p-3 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-semibold text-slate-300">Banco de Dados</span>
-              <span className="text-[10px] text-emerald-400 font-medium">Sheets V1</span>
+              <span className="text-[10px] text-emerald-400 font-medium">Supabase</span>
             </div>
             <div className="text-[11px] text-slate-400">
               <strong>{totalResponsesCount}</strong> respostas processadas pelo Motor Analítico.
