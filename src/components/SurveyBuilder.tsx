@@ -351,7 +351,7 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
             className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-blue-600/20 active:scale-95 transition-all disabled:opacity-50"
           >
             {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin text-white" /> : <Send className="w-3.5 h-3.5" />}
-            <span>Publicar no Sheets</span>
+            <span>Publicar</span>
           </button>
         </div>
       </div>
