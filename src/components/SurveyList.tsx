@@ -100,7 +100,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
             </span>
           </div>
           <p className="text-xs md:text-sm text-slate-500 mt-1">
-            Gerencie questionários, publique formulários e visualize dados sincronizados com o Google Sheets.
+            Gerencie questionários, publique formulários e visualize os dados em tempo real.
           </p>
         </div>
 
@@ -109,7 +109,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
             <button
               onClick={onRefreshData}
               disabled={isLoading}
-              title="Recarregar dados do Google Sheets"
+              title="Recarregar dados do banco"
               className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-blue-600' : 'text-slate-600'}`} />
@@ -132,7 +132,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
           <div className="flex items-center gap-2.5">
             <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
             <div>
-              <p className="font-bold">Não foi possível carregar as pesquisas do Google Sheets</p>
+              <p className="font-bold">Não foi possível carregar as pesquisas</p>
               <p className="text-rose-700">{apiError}</p>
             </div>
           </div>
@@ -184,7 +184,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
       {isLoading ? (
         <div className="bg-white rounded-2xl p-12 text-center border border-slate-200/80 space-y-3">
           <Loader2 className="w-8 h-8 mx-auto text-blue-600 animate-spin" />
-          <h3 className="font-bold text-slate-800 text-sm">Carregando pesquisas do Google Sheets...</h3>
+          <h3 className="font-bold text-slate-800 text-sm">Carregando pesquisas...</h3>
           <p className="text-xs text-slate-500">Buscando questionários e respostas atualizadas diretamente da planilha.</p>
         </div>
       ) : surveys.length === 0 ? (
@@ -192,7 +192,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
           <Layers className="w-12 h-12 mx-auto text-slate-300" />
           <h3 className="font-bold text-slate-800 text-base">Nenhuma pesquisa criada ainda</h3>
           <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Sua planilha do Google Sheets está pronta. Crie seu primeiro formulário para gerar links públicos e coletar dados em tempo real.
+            Seu banco de dados está pronto. Crie seu primeiro formulário para gerar links públicos e coletar dados em tempo real.
           </p>
           <button
             onClick={onOpenNewSurvey}
@@ -435,14 +435,14 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                         <button
                           onClick={() => {
                             setOpenMenuId(null);
-                            if (window.confirm(`Tem certeza que deseja excluir a pesquisa "${survey.titulo}" e todas as suas respostas do Google Sheets? Esta ação não pode ser desfeita.`)) {
+                            if (window.confirm(`Tem certeza que deseja excluir a pesquisa "${survey.titulo}" e todas as suas respostas? Esta ação não pode ser desfeita.`)) {
                               onDeleteSurvey(survey.id);
                             }
                           }}
                           className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-rose-600 hover:bg-rose-50 flex items-center gap-2"
                         >
                           <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                          <span>Excluir do Sheets</span>
+                          <span>Excluir</span>
                         </button>
                       </div>
                     )}
