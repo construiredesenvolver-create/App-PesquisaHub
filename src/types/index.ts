@@ -194,6 +194,7 @@ export interface AppUser {
   ativo: boolean;
   criado_em?: string;
   ultimo_login?: string;
+  pedido_reset_em?: string; // usuário clicou em "Esqueci minha senha" e aguarda o ADM
 }
 
 export interface AuthSession {
