@@ -47,11 +47,11 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Action Buttons & Status */}
       <div className="flex items-center gap-2.5">
-        {/* Indicador de Conexão com Google Sheets */}
+        {/* Indicador de Conexão com o banco (Supabase) */}
         {gasConfig && (
           <button
             onClick={onOpenSettings}
-            title={gasConfig.isConnected ? 'Google Sheets Conectado (Clique para gerenciar)' : 'Google Sheets Não Conectado (Clique para configurar)'}
+            title={gasConfig.isConnected ? 'Banco de dados conectado (clique para ver as configurações)' : 'Banco de dados indisponível (clique para ver as configurações)'}
             className={`px-2.5 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors ${
               gasConfig.isConnected
                 ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
@@ -61,12 +61,12 @@ export const Navbar: React.FC<NavbarProps> = ({
             {gasConfig.isConnected ? (
               <>
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="hidden sm:inline">Sheets Ativo</span>
+                <span className="hidden sm:inline">Banco Ativo</span>
               </>
             ) : (
               <>
                 <CloudOff className="w-3.5 h-3.5 text-amber-600" />
-                <span className="hidden sm:inline">Conectar Sheets</span>
+                <span className="hidden sm:inline">Sem conexão</span>
               </>
             )}
           </button>
@@ -77,7 +77,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={onRefreshData}
             disabled={isRefreshing}
-            title="Recarregar dados reais da planilha Google Sheets"
+            title="Recarregar dados do banco"
             className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium text-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-600' : 'text-slate-500'}`} />
