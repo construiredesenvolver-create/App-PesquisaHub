@@ -125,7 +125,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
               Obrigado, <strong className="text-blue-600">{nome || 'Participante'}</strong>.
             </p>
             <p className="text-xs md:text-sm text-slate-500 leading-relaxed">
-              {survey.configuracoes.mensagem_conclusao || 'Sua resposta foi registrada com sucesso no banco de dados do Google Sheets.'}
+              {survey.configuracoes.mensagem_conclusao || 'Sua resposta foi registrada com sucesso.'}
             </p>
           </div>
 
@@ -282,7 +282,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
           // Ignorar se confetti falhar
         }
       } else {
-        setErrorMessage(result.message || 'Erro ao registrar resposta no Google Sheets. Tente novamente.');
+        setErrorMessage(result.message || 'Erro ao registrar sua resposta. Tente novamente.');
       }
     } catch (err: any) {
       setErrorMessage(err.message || 'Erro de comunicação ao enviar suas respostas.');
@@ -619,7 +619,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
 
       {/* Footer Minimalista */}
       <div className="py-6 text-center text-xs text-slate-400">
-        <p>Desenvolvido com PesquisaHub • Integração Segura com Google Sheets</p>
+        <p>Desenvolvido com PesquisaHub • Respostas gravadas com segurança</p>
       </div>
 
     </div>
