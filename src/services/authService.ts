@@ -1,90 +1,30 @@
 import { AppUser, AuthSession } from '../types';
-import { AUTH_STORAGE_KEY, DEFAULT_GAS_WEB_APP_URL, GAS_STORAGE_KEY } from './config';
+import { AUTH_STORAGE_KEY } from './config';
+import { supabase, mensagemDeErro, chamarFuncao } from './supabaseClient';
 
 /**
- * Espera alguns milissegundos (usado entre tentativas de retry).
+ * Serviço de Autenticação do PesquisaHub (Supabase Auth).
+ *
+ * O login/senha é tratado pelo Supabase Auth. Além da sessão do Supabase, guardamos
+ * uma cópia simples do usuário logado em localStorage, para que as telas possam
+ * saber "quem está logado" de forma imediata (síncrona), como antes.
  */
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+
+function perfilParaUsuario(p: any): AppUser {
+  return {
+    id: String(p.id),
+    nome: String(p.nome || ''),
+    email: String(p.email || ''),
+    role: p.role === 'admin' ? 'admin' : 'user',
+    deve_trocar_senha: Boolean(p.deve_trocar_senha),
+    ativo: p.ativo !== false,
+    criado_em: p.criado_em || '',
+    ultimo_login: p.ultimo_login || '',
+    pedido_reset_em: p.pedido_reset_em || ''
+  };
 }
 
-/**
- * Serviço de Autenticação do PesquisaHub.
- *
- * Fala diretamente com o Google Apps Script (mesmas ações de login, troca de senha
- * e gestão de usuários que foram adicionadas ao Code.gs) e mantém a sessão atual
- * (token + usuário logado) salva no navegador, em localStorage.
- */
 export class AuthService {
-  // Lê a URL do Apps Script diretamente da mesma chave usada pelo ApiService,
-  // sem depender do ApiService (evita import circular) e sempre com um valor padrão.
-  private static getWebAppUrl(): string {
-    try {
-      const stored = localStorage.getItem(GAS_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed && parsed.webAppUrl) return parsed.webAppUrl;
-      }
-    } catch (e) {
-      // ignora e usa o padrão
-    }
-    return DEFAULT_GAS_WEB_APP_URL;
-  }
-
-  /**
-   * Chama o Apps Script com tentativas automáticas em caso de falha de rede ou
-   * resposta não-JSON (sinal de "cold start" do Apps Script depois de um tempo sem
-   * uso — a causa mais provável do erro que aparecia no primeiro login do dia).
-   *
-   * NÃO tentamos de novo quando o servidor respondeu normalmente com um erro de
-   * aplicação (ex: "e-mail ou senha inválidos") — isso já é uma resposta legítima,
-   * repetir a chamada não mudaria o resultado.
-   */
-  private static async callGas(action: string, payload?: Record<string, any>, retries = 2): Promise<any> {
-    const url = this.getWebAppUrl();
-    if (!url) throw new Error('Google Apps Script não configurado.');
-
-    let lastError: any;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action, ...payload })
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status} ao comunicar com o Google Apps Script.`);
-        }
-
-        let result: any;
-        try {
-          result = await response.json();
-        } catch (parseErr) {
-          // Resposta 200 mas sem JSON válido — sinal típico de cold start devolvendo
-          // uma página de erro do Google em vez da API. Vale tentar de novo.
-          throw new Error('Resposta inesperada do servidor (não é JSON válido). Tentando novamente...');
-        }
-
-        if (result.status !== 'ok' && result.success !== true) {
-          // Erro de aplicação de verdade (ex: senha incorreta) — não é cold start,
-          // não adianta tentar de novo.
-          throw new Error(result.message || 'Erro ao processar a solicitação.');
-        }
-
-        return result;
-      } catch (err: any) {
-        lastError = err;
-        const isApplicationError = err && err.__isApplicationError;
-        if (isApplicationError || attempt >= retries) {
-          throw err;
-        }
-        await delay(900 * (attempt + 1));
-      }
-    }
-    throw lastError;
-  }
-
   // ==========================================
   // SESSÃO (armazenada no navegador)
   // ==========================================
@@ -119,35 +59,92 @@ export class AuthService {
     localStorage.removeItem(AUTH_STORAGE_KEY);
   }
 
+  /**
+   * Confere, ao abrir o app, se a sessão do Supabase ainda é válida e atualiza os
+   * dados do usuário (nome, permissão, ativo). Devolve null se for preciso logar de novo.
+   * Falhas de rede NÃO derrubam a sessão (o usuário só é deslogado quando o servidor
+   * confirma que a sessão não existe ou que o usuário foi desativado).
+   */
+  public static async validateSession(): Promise<AppUser | null> {
+    const local = this.getSession();
+    if (!local) return null;
+
+    const { data, error } = await supabase.auth.getSession();
+    if (error) return local.user; // problema de rede: mantém como está
+    if (!data.session) {
+      this.clearSession();
+      return null;
+    }
+
+    try {
+      const { data: perfil, error: perfilErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.session.user.id)
+        .maybeSingle();
+      if (perfilErr) return local.user;
+      if (!perfil || perfil.ativo === false) {
+        await this.logout();
+        return null;
+      }
+      const user = perfilParaUsuario(perfil);
+      this.saveSession({ token: data.session.access_token, user });
+      return user;
+    } catch (e) {
+      return local.user;
+    }
+  }
+
   // ==========================================
   // AÇÕES DE AUTENTICAÇÃO
   // ==========================================
 
   public static async login(email: string, senha: string): Promise<AuthSession> {
-    const result = await this.callGas('login', { email, senha });
-    const session: AuthSession = { token: result.data.token, user: result.data.user };
+    if (!email || !senha) throw new Error('Informe e-mail e senha.');
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim().toLowerCase(),
+      password: senha
+    });
+    if (error || !data.session) {
+      throw new Error(mensagemDeErro(error, 'E-mail ou senha inválidos.'));
+    }
+
+    const { data: perfil, error: perfilErr } = await supabase.rpc('registrar_login');
+    if (perfilErr || !perfil) {
+      await supabase.auth.signOut();
+      throw new Error(mensagemDeErro(perfilErr, 'Não foi possível carregar seu perfil.'));
+    }
+    if (perfil.ativo === false) {
+      await supabase.auth.signOut();
+      throw new Error('Este usuário está desativado. Fale com o administrador.');
+    }
+
+    const session: AuthSession = { token: data.session.access_token, user: perfilParaUsuario(perfil) };
     this.saveSession(session);
     return session;
   }
 
   public static async logout(): Promise<void> {
-    const token = this.getToken();
     this.clearSession();
-    if (token) {
-      try {
-        await this.callGas('logout', { token }, 0);
-      } catch (e) {
-        // Sessão local já foi limpa; falha ao avisar o servidor não é crítica.
-      }
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      // Sessão local já foi limpa; falha ao avisar o servidor não é crítica.
     }
   }
 
   public static async changePassword(novaSenha: string): Promise<void> {
-    const token = this.getToken();
-    if (!token) throw new Error('Você não está logado.');
-    await this.callGas('changePassword', { token, novaSenha }, 1);
+    if (!this.getSession()) throw new Error('Você não está logado.');
+    if (!novaSenha || novaSenha.length < 6) {
+      throw new Error('A nova senha deve ter pelo menos 6 caracteres.');
+    }
 
-    // Atualizar a sessão local para refletir que a senha não precisa mais ser trocada
+    const { error } = await supabase.auth.updateUser({ password: novaSenha });
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível trocar a senha.'));
+
+    await supabase.rpc('marcar_senha_trocada');
+
     const session = this.getSession();
     if (session) {
       session.user.deve_trocar_senha = false;
@@ -156,8 +153,9 @@ export class AuthService {
   }
 
   public static async requestPasswordReset(email: string): Promise<string> {
-    const result = await this.callGas('requestPasswordReset', { email });
-    return result.message as string;
+    if (!email) throw new Error('Informe seu e-mail.');
+    await supabase.rpc('solicitar_reset_senha', { p_email: email.trim() });
+    return 'Pedido registrado. Se o e-mail existir em nossa base, o administrador verá sua solicitação e enviará uma senha temporária.';
   }
 
   // ==========================================
@@ -165,29 +163,22 @@ export class AuthService {
   // ==========================================
 
   public static async listUsers(): Promise<AppUser[]> {
-    const token = this.getToken();
-    if (!token) throw new Error('Você não está logado.');
-    const result = await this.callGas('listUsers', { token });
-    return (result.users || result.data || []) as AppUser[];
+    const { data, error } = await supabase.from('profiles').select('*').order('criado_em', { ascending: true });
+    if (error) throw new Error(mensagemDeErro(error, 'Erro ao carregar usuários.'));
+    return (data || []).map(perfilParaUsuario);
   }
 
   public static async createUser(nome: string, email: string, role: 'admin' | 'user'): Promise<{ tempPassword: string; message: string }> {
-    const token = this.getToken();
-    if (!token) throw new Error('Você não está logado.');
-    const result = await this.callGas('createUser', { token, usuario: { nome, email, role } }, 1);
-    return { tempPassword: result.data.tempPassword, message: result.message };
+    const result = await chamarFuncao('admin-usuarios', { acao: 'criar', nome, email, role });
+    return { tempPassword: result.tempPassword, message: result.message };
   }
 
   public static async resetPassword(userId: string): Promise<{ tempPassword: string; message: string }> {
-    const token = this.getToken();
-    if (!token) throw new Error('Você não está logado.');
-    const result = await this.callGas('resetPassword', { token, userId }, 1);
-    return { tempPassword: result.data.tempPassword, message: result.message };
+    const result = await chamarFuncao('admin-usuarios', { acao: 'redefinir', userId });
+    return { tempPassword: result.tempPassword, message: result.message };
   }
 
   public static async toggleUserActive(userId: string, ativo: boolean): Promise<void> {
-    const token = this.getToken();
-    if (!token) throw new Error('Você não está logado.');
-    await this.callGas('toggleUserActive', { token, userId, ativo }, 1);
+    await chamarFuncao('admin-usuarios', { acao: 'ativar', userId, ativo });
   }
 }
