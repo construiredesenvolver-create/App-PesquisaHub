@@ -75,7 +75,7 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
         <div className="relative z-10 max-w-2xl space-y-4">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/20 border border-blue-400/30 text-blue-300 text-xs font-semibold">
             <Database className="w-3.5 h-3.5" />
-            <span>Conexão Direta Google Sheets</span>
+            <span>Banco de Dados Supabase</span>
           </div>
           {primeiroNome && (
             <p className="text-blue-300 text-sm font-semibold">{saudacao}, {primeiroNome} 👋</p>
@@ -84,7 +84,7 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
             Transforme respostas em decisões estratégicas.
           </h1>
           <p className="text-slate-300 text-sm md:text-base leading-relaxed">
-            Crie questionários com links públicos anônimos, colete respostas no Google Sheets e acesse painéis estatísticos com drill-down individual por resposta.
+            Crie questionários com links públicos anônimos, colete respostas com gravação instantânea e acesse painéis estatísticos com drill-down individual por resposta.
           </p>
           <div className="pt-2 flex flex-wrap items-center gap-3">
             <button
@@ -99,7 +99,7 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
               className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-slate-200 border border-white/20 font-medium text-xs md:text-sm flex items-center gap-2 transition-colors"
             >
               <Database className="w-4 h-4 text-emerald-300" />
-              <span>Status da Conexão Sheets</span>
+              <span>Status da Conexão</span>
             </button>
           </div>
         </div>
@@ -177,7 +177,7 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <BarChart3 className="w-5 h-5 text-blue-600" />
-              <h2 className="font-bold text-slate-800 text-lg">Pesquisas no Google Sheets</h2>
+              <h2 className="font-bold text-slate-800 text-lg">Suas Pesquisas</h2>
             </div>
             {surveys.length > 0 && (
               <button
@@ -288,7 +288,7 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
           )}
         </div>
 
-        {/* Right 1 Col: Feed de Respostas Recentes & Google Sheets Info */}
+        {/* Right 1 Col: Feed de Respostas Recentes & Info do Banco */}
         <div className="space-y-6">
           
           {/* Feed de Respostas */}
@@ -299,7 +299,7 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
                 <h3 className="font-bold text-slate-800 text-sm">Respostas Recentes</h3>
               </div>
               <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
-                Google Sheets
+                Ao vivo
               </span>
             </div>
 
@@ -333,15 +333,15 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
             )}
           </div>
 
-          {/* Card Conexão Google Sheets */}
+          {/* Card Conexão Banco de Dados */}
           <div className="bg-slate-900 text-slate-100 rounded-2xl p-5 border border-slate-800 shadow-md space-y-3 relative overflow-hidden">
             <div className="flex items-center gap-2 text-emerald-400">
               <Database className="w-4 h-4" />
               <span className="text-xs font-bold uppercase tracking-wider">Banco de Dados Oficial</span>
             </div>
-            <h4 className="font-bold text-white text-sm">Google Sheets & Apps Script</h4>
+            <h4 className="font-bold text-white text-sm">Supabase (PostgreSQL)</h4>
             <p className="text-xs text-slate-300 leading-relaxed">
-              Armazenamento relacional direto em abas (Surveys, Questions, Options, Respondents e Answers).
+              Banco relacional com regras de acesso por usuário: pesquisas, perguntas, opções, respondentes e respostas.
             </p>
             <button
               onClick={onOpenSettings}
