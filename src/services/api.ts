@@ -716,6 +716,44 @@ export class ApiService {
     if (error) throw new Error(mensagemDeErro(error, 'Não foi possível salvar as alterações da pesquisa.'));
   }
 
+  /**
+   * Exclui a resposta de uma pessoa (feita por engano ou duplicada). As respostas
+   * de cada pergunta saem junto. Só Administrador e Gestor do departamento.
+   */
+  public static async deleteRespondent(surveyId: string, respondentId: string): Promise<void> {
+    const { data, error } = await supabase
+      .from('respondents')
+      .delete()
+      .eq('id', respondentId)
+      .eq('survey_id', surveyId)
+      .select('id');
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível excluir a resposta.'));
+    if (!data || data.length === 0) throw new Error('Você não tem permissão para excluir respostas desta pesquisa.');
+
+    this.respondents = this.respondents.filter((r) => r.id !== respondentId);
+    this.answers = this.answers.filter((a) => a.respondent_id !== respondentId);
+    const survey = this.surveys.find((s) => s.id === surveyId);
+    if (survey && typeof survey.total_respostas === 'number') survey.total_respostas = Math.max(0, survey.total_respostas - 1);
+  }
+
+  /**
+   * Atualiza parte das configurações da pesquisa (ex.: lista de pessoas esperadas),
+   * sem mexer no restante.
+   */
+  public static async updateSurveyConfiguracoes(surveyId: string, parcial: Record<string, any>): Promise<void> {
+    const { data, error } = await supabase.from('surveys').select('configuracoes').eq('id', surveyId).maybeSingle();
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível ler a pesquisa.'));
+    if (!data) throw new Error('Pesquisa não encontrada.');
+
+    const configuracoes = { ...(data.configuracoes || {}), ...parcial };
+    const { data: alteradas, error: upErr } = await supabase.from('surveys').update({ configuracoes }).eq('id', surveyId).select('id');
+    if (upErr) throw new Error(mensagemDeErro(upErr, 'Não foi possível salvar.'));
+    if (!alteradas || alteradas.length === 0) throw new Error('Você não tem permissão para alterar esta pesquisa.');
+
+    const survey = this.surveys.find((s) => s.id === surveyId);
+    if (survey) survey.configuracoes = { ...survey.configuracoes, ...parcial };
+  }
+
   // ==========================================
   // DEPARTAMENTOS
   // ==========================================
