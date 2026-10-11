@@ -10,6 +10,16 @@ import { PublicSurveyView } from './components/PublicSurveyView';
 import { ShareModal } from './components/ShareModal';
 import { LoginView } from './components/LoginView';
 import { UsersView } from './components/UsersView';
+import { DepartmentsView } from './components/DepartmentsView';
+import { AcessoEspecialModal } from './components/AcessoEspecialModal';
+import {
+  podeCriarPesquisa,
+  podeEditarPesquisa,
+  podeExcluirPesquisa,
+  podeLiberarAcesso,
+  podeExportarPesquisa,
+  departamentosParaCriar
+} from './services/permissoes';
 import { ApiService } from './services/api';
 import { AuthService } from './services/authService';
 import { 
@@ -21,7 +31,9 @@ import {
   SurveyStatus,
   GoogleAppsScriptConfig,
   AppUser,
-  AppSettings
+  AppSettings,
+  Department,
+  QuestionDraftPayload
 } from './types';
 import { Loader2 } from 'lucide-react';
 
@@ -61,6 +73,13 @@ export function App() {
   } | null>(null);
   const [isLoadingPublicSurvey, setIsLoadingPublicSurvey] = useState(false);
   const [shareModalSurvey, setShareModalSurvey] = useState<Survey | null>(null);
+  const [accessModalSurvey, setAccessModalSurvey] = useState<Survey | null>(null);
+
+  // Departamentos (lista geral) e filtro de departamentos escolhido pela pessoa no painel
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [filtroDepartamentos, setFiltroDepartamentos] = useState<string[]>(
+    () => AuthService.getCurrentUser()?.preferencias?.departamentos_visiveis || []
+  );
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -95,6 +114,7 @@ export function App() {
         if (result.success && result.data) {
           setSurveys(result.data.surveys);
           setRespondents(result.data.respondents);
+          setDepartments(ApiService.getDepartments());
           setGasConfig(ApiService.getGasConfig());
           setApiError(null);
         } else {
@@ -220,6 +240,10 @@ export function App() {
   };
 
   const handleEditSurvey = (survey: Survey) => {
+    if (!podeEditarPesquisa(currentUser, survey)) {
+      showToast('Você não tem permissão para editar esta pesquisa.');
+      return;
+    }
     setEditingSurvey(survey);
     setActiveTab('builder');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -230,18 +254,15 @@ export function App() {
 
   const handleSaveSurvey = async (
     surveyData: Omit<Survey, 'id' | 'data_criacao'>,
-    questionsData: Array<{ question: Omit<Question, 'id' | 'survey_id'>; options: Omit<Option, 'id' | 'question_id'>[] }>
+    questionsData: QuestionDraftPayload
   ) => {
     setIsSavingSurvey(true);
     try {
       if (editingSurvey) {
-        const updatedSurvey: Survey = {
-          ...editingSurvey,
-          ...surveyData
-        };
-        // Atualizar localmente e enviar status/dados
-        await ApiService.updateSurveyStatus(updatedSurvey.id, updatedSurvey.status);
-        showToast(`Pesquisa "${updatedSurvey.titulo}" atualizada!`);
+        // Edição completa (dados, perguntas e alternativas) numa única operação.
+        // O ID e o link público da pesquisa não mudam.
+        await ApiService.updateSurveyFull(editingSurvey.id, surveyData, questionsData);
+        showToast(`Pesquisa "${surveyData.titulo}" atualizada!`);
       } else {
         const surveyDataComDono = { ...surveyData, criado_por: currentUser?.id || surveyData.criado_por };
         const newSurvey = await ApiService.createSurvey(surveyDataComDono, questionsData);
@@ -307,12 +328,22 @@ export function App() {
   // Ações de Autenticação
   const handleLoginSuccess = (user: AppUser) => {
     setCurrentUser(user);
+    setFiltroDepartamentos(user.preferencias?.departamentos_visiveis || []);
     refreshDataFromSheets();
+  };
+
+  // Filtro de departamentos do painel (salvo como preferência pessoal)
+  const handleFiltroDepartamentos = (ids: string[]) => {
+    setFiltroDepartamentos(ids);
+    AuthService.savePreferences({ departamentos_visiveis: ids }).catch(() => {
+      // preferência é conveniência: se falhar, o filtro vale só nesta sessão
+    });
   };
 
   const handleLogout = async () => {
     await AuthService.logout();
     setCurrentUser(null);
+    setFiltroDepartamentos([]);
     setSurveys([]);
     setQuestions([]);
     setOptions([]);
@@ -353,6 +384,11 @@ export function App() {
 
   // Exportação CSV com dados reais
   const handleExportCSV = (surveyId: string) => {
+    const alvo = surveys.find((s) => s.id === surveyId);
+    if (alvo && !podeExportarPesquisa(currentUser, alvo, ApiService.podeExportarComoEspecial())) {
+      showToast('Seu acesso a esta pesquisa não permite exportar.');
+      return;
+    }
     const csvContent = ApiService.exportToCSV(surveyId);
     if (!csvContent) {
       showToast('Não foi possível gerar a exportação CSV.');
@@ -421,7 +457,28 @@ export function App() {
   }
 
   // Usuários que já são "user" comum não devem ficar presos na tela de Usuários (só ADM)
-  const effectiveTab = (activeTab === 'users' && currentUser.role !== 'admin') ? 'dashboard' : activeTab;
+  const podeCriar = podeCriarPesquisa(currentUser);
+  const effectiveTab =
+    ((activeTab === 'users' || activeTab === 'departments') && currentUser.role !== 'admin') ||
+    (activeTab === 'builder' && !editingSurvey && !podeCriar)
+      ? 'dashboard'
+      : activeTab;
+
+  // Departamentos que aparecem nas pesquisas visíveis a esta pessoa
+  const departamentosEmUso = departments.filter((d) => surveys.some((s) => s.department_id === d.id));
+  const filtroAtivo = filtroDepartamentos.filter((id) => departamentosEmUso.some((d) => d.id === id));
+  const surveysVisiveis = filtroAtivo.length > 0
+    ? surveys.filter((s) => s.department_id && filtroAtivo.includes(s.department_id))
+    : surveys;
+  const idsVisiveis = new Set(surveysVisiveis.map((s) => s.id));
+  const respondentsVisiveis = filtroAtivo.length > 0 ? respondents.filter((r) => idsVisiveis.has(r.survey_id)) : respondents;
+
+  const permissoesLista = {
+    podeCriar,
+    podeEditar: (s: Survey) => podeEditarPesquisa(currentUser, s),
+    podeExcluir: (s: Survey) => podeExcluirPesquisa(currentUser, s),
+    podeLiberar: (s: Survey) => podeLiberarAcesso(currentUser, s)
+  };
 
   // Obter perguntas e opções da pesquisa atualmente em análise
   const currentSurveyQuestions = activeSurveyId
@@ -452,11 +509,16 @@ export function App() {
       <Sidebar
         activeTab={effectiveTab}
         onTabChange={(tab) => {
-          setActiveTab(tab);
+          if (tab === 'builder') {
+            handleOpenNewSurvey();
+          } else {
+            setActiveTab(tab);
+          }
         }}
         activeSurvey={activeSurvey}
-        totalSurveysCount={surveys.length}
-        totalResponsesCount={respondents.length}
+        totalSurveysCount={surveysVisiveis.length}
+        totalResponsesCount={respondentsVisiveis.length}
+        podeCriar={podeCriar}
         isMobileOpen={mobileMenuOpen}
         onCloseMobile={() => setMobileMenuOpen(false)}
         currentUser={currentUser}
@@ -476,15 +538,49 @@ export function App() {
           activeSurveyTitle={effectiveTab === 'analytics' && activeSurvey ? activeSurvey.titulo : undefined}
           gasConfig={gasConfig}
           onOpenSettings={() => setActiveTab('settings')}
+          podeCriar={podeCriar}
         />
 
         {/* View Switcher */}
         <main className="flex-1 pb-16">
+          {/* Filtro de departamentos (aparece quando há pesquisas de mais de um departamento) */}
+          {(effectiveTab === 'dashboard' || effectiveTab === 'surveys') && departamentosEmUso.length > 1 && (
+            <div className="px-4 md:px-8 pt-4 max-w-7xl mx-auto">
+              <div className="bg-white border border-slate-200 rounded-2xl px-4 py-3 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mr-1">Departamentos</span>
+                <button
+                  onClick={() => handleFiltroDepartamentos([])}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    filtroAtivo.length === 0 ? 'bg-slate-900 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                  }`}
+                >
+                  Todos
+                </button>
+                {departamentosEmUso.map((d) => {
+                  const marcado = filtroAtivo.includes(d.id);
+                  return (
+                    <button
+                      key={d.id}
+                      onClick={() =>
+                        handleFiltroDepartamentos(marcado ? filtroAtivo.filter((x) => x !== d.id) : [...filtroAtivo, d.id])
+                      }
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                        marcado ? 'bg-blue-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {d.nome}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {effectiveTab === 'dashboard' && (
             <GeneralDashboard
-              surveys={surveys}
-              totalResponsesCount={respondents.length}
-              respondents={respondents}
+              surveys={surveysVisiveis}
+              totalResponsesCount={respondentsVisiveis.length}
+              respondents={respondentsVisiveis}
               onAnalyzeSurvey={handleAnalyzeSurvey}
               onOpenNewSurvey={handleOpenNewSurvey}
               onOpenPublicView={handleOpenPublicView}
@@ -498,9 +594,12 @@ export function App() {
 
           {effectiveTab === 'surveys' && (
             <SurveyList
-              surveys={surveys}
+              surveys={surveysVisiveis}
               questions={questions}
-              respondents={respondents}
+              respondents={respondentsVisiveis}
+              permissoes={permissoesLista}
+              onManageAccess={(s) => setAccessModalSurvey(s)}
+              mostrarDepartamento={departamentosEmUso.length > 1 || currentUser.role === 'admin'}
               isLoading={isRefreshing}
               apiError={apiError}
               onRefreshData={refreshDataFromSheets}
@@ -528,6 +627,8 @@ export function App() {
                 initialOptions={editingSurvey ? options : undefined}
                 isSaving={isSavingSurvey}
                 onSaveSurvey={handleSaveSurvey}
+                departamentosDisponiveis={departamentosParaCriar(currentUser, departments)}
+                key={editingSurvey ? `editar-${editingSurvey.id}` : 'nova'}
                 onCancel={() => setActiveTab(surveys.length > 0 ? 'surveys' : 'dashboard')}
               />
             )
@@ -551,6 +652,8 @@ export function App() {
                   onShareSurvey={(s) => setShareModalSurvey(s)}
                   onOpenPublicView={handleOpenPublicView}
                   onExportCSV={handleExportCSV}
+                  somenteLeitura={!podeEditarPesquisa(currentUser, activeSurvey)}
+                  podeExportar={podeExportarPesquisa(currentUser, activeSurvey, ApiService.podeExportarComoEspecial())}
                 />
               )
             ) : (
@@ -568,6 +671,15 @@ export function App() {
 
           {effectiveTab === 'users' && currentUser.role === 'admin' && (
             <UsersView />
+          )}
+
+          {effectiveTab === 'departments' && currentUser.role === 'admin' && (
+            <DepartmentsView
+              surveys={surveys}
+              onDepartmentsChanged={() => {
+                ApiService.fetchDepartments().then(setDepartments).catch(() => undefined);
+              }}
+            />
           )}
 
           {effectiveTab === 'settings' && (
@@ -590,6 +702,11 @@ export function App() {
           )}
         </main>
       </div>
+
+      {/* Liberação de acesso especial a uma pesquisa */}
+      {accessModalSurvey && (
+        <AcessoEspecialModal survey={accessModalSurvey} onClose={() => setAccessModalSurvey(null)} />
+      )}
 
       {/* Share Modal Dialog */}
       {shareModalSurvey && (
