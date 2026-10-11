@@ -1,4 +1,4 @@
-import { AppUser, AuthSession } from '../types';
+import { AppUser, AuthSession, UserRole } from '../types';
 import { AUTH_STORAGE_KEY } from './config';
 import { supabase, mensagemDeErro, chamarFuncao } from './supabaseClient';
 
@@ -10,18 +10,32 @@ import { supabase, mensagemDeErro, chamarFuncao } from './supabaseClient';
  * saber "quem está logado" de forma imediata (síncrona), como antes.
  */
 
-function perfilParaUsuario(p: any): AppUser {
+const PAPEIS_VALIDOS: UserRole[] = ['admin', 'gestor', 'lider', 'especial'];
+
+function normalizarPapel(role: any): UserRole {
+  return PAPEIS_VALIDOS.includes(role) ? role : 'lider';
+}
+
+function perfilParaUsuario(p: any, departamentos: string[] = []): AppUser {
   return {
     id: String(p.id),
     nome: String(p.nome || ''),
     email: String(p.email || ''),
-    role: p.role === 'admin' ? 'admin' : 'user',
+    role: normalizarPapel(p.role),
     deve_trocar_senha: Boolean(p.deve_trocar_senha),
     ativo: p.ativo !== false,
     criado_em: p.criado_em || '',
     ultimo_login: p.ultimo_login || '',
-    pedido_reset_em: p.pedido_reset_em || ''
+    pedido_reset_em: p.pedido_reset_em || '',
+    departamentos,
+    preferencias: (p.preferencias && typeof p.preferencias === 'object') ? p.preferencias : {}
   };
+}
+
+async function departamentosDoUsuario(userId: string): Promise<string[]> {
+  const { data, error } = await supabase.from('user_departments').select('department_id').eq('user_id', userId);
+  if (error || !data) return [];
+  return data.map((r: any) => String(r.department_id));
 }
 
 export class AuthService {
@@ -87,7 +101,7 @@ export class AuthService {
         await this.logout();
         return null;
       }
-      const user = perfilParaUsuario(perfil);
+      const user = perfilParaUsuario(perfil, await departamentosDoUsuario(perfil.id));
       this.saveSession({ token: data.session.access_token, user });
       return user;
     } catch (e) {
@@ -120,7 +134,8 @@ export class AuthService {
       throw new Error('Este usuário está desativado. Fale com o administrador.');
     }
 
-    const session: AuthSession = { token: data.session.access_token, user: perfilParaUsuario(perfil) };
+    const departamentos = await departamentosDoUsuario(perfil.id);
+    const session: AuthSession = { token: data.session.access_token, user: perfilParaUsuario(perfil, departamentos) };
     this.saveSession(session);
     return session;
   }
@@ -162,15 +177,89 @@ export class AuthService {
   // GESTÃO DE USUÁRIOS (apenas ADM)
   // ==========================================
 
+  /**
+   * Lista os usuários que a pessoa logada pode ver (admin: todos; gestor: os dos
+   * seus departamentos), já com os departamentos de cada um.
+   */
   public static async listUsers(): Promise<AppUser[]> {
-    const { data, error } = await supabase.from('profiles').select('*').order('criado_em', { ascending: true });
+    const [{ data, error }, { data: vinculos }] = await Promise.all([
+      supabase.from('profiles').select('*').order('criado_em', { ascending: true }),
+      supabase.from('user_departments').select('user_id, department_id')
+    ]);
     if (error) throw new Error(mensagemDeErro(error, 'Erro ao carregar usuários.'));
-    return (data || []).map(perfilParaUsuario);
+
+    const porUsuario: Record<string, string[]> = {};
+    (vinculos || []).forEach((v: any) => {
+      (porUsuario[v.user_id] = porUsuario[v.user_id] || []).push(String(v.department_id));
+    });
+    return (data || []).map((p: any) => perfilParaUsuario(p, porUsuario[p.id] || []));
   }
 
-  public static async createUser(nome: string, email: string, role: 'admin' | 'user'): Promise<{ tempPassword: string; message: string }> {
-    const result = await chamarFuncao('admin-usuarios', { acao: 'criar', nome, email, role });
+  public static async createUser(
+    nome: string,
+    email: string,
+    role: UserRole,
+    departamentos: string[] = []
+  ): Promise<{ tempPassword: string; message: string }> {
+    const result = await chamarFuncao('admin-usuarios', { acao: 'criar', nome, email, role, departamentos });
     return { tempPassword: result.tempPassword, message: result.message };
+  }
+
+  /**
+   * Admin: define o papel e os departamentos de um usuário.
+   */
+  public static async updateUserAccess(userId: string, role: UserRole, departamentos: string[]): Promise<void> {
+    const atual = this.getCurrentUser();
+    if (atual && atual.id === userId && atual.role === 'admin' && role !== 'admin') {
+      throw new Error('Você não pode remover o seu próprio perfil de Administrador.');
+    }
+
+    const { error: pErr } = await supabase.from('profiles').update({ role }).eq('id', userId);
+    if (pErr) throw new Error(mensagemDeErro(pErr, 'Não foi possível alterar o papel.'));
+
+    const { data: existentes, error: lErr } = await supabase
+      .from('user_departments')
+      .select('department_id')
+      .eq('user_id', userId);
+    if (lErr) throw new Error(mensagemDeErro(lErr, 'Não foi possível ler os departamentos do usuário.'));
+
+    const atuais = (existentes || []).map((r: any) => String(r.department_id));
+    const remover = atuais.filter((d) => !departamentos.includes(d));
+    const adicionar = departamentos.filter((d) => !atuais.includes(d));
+
+    if (remover.length > 0) {
+      const { error } = await supabase.from('user_departments').delete().eq('user_id', userId).in('department_id', remover);
+      if (error) throw new Error(mensagemDeErro(error, 'Não foi possível remover departamentos.'));
+    }
+    if (adicionar.length > 0) {
+      const { error } = await supabase
+        .from('user_departments')
+        .insert(adicionar.map((department_id) => ({ user_id: userId, department_id })));
+      if (error) throw new Error(mensagemDeErro(error, 'Não foi possível adicionar departamentos.'));
+    }
+
+    // Se mexeu no próprio usuário, atualiza a sessão local
+    if (atual && atual.id === userId) {
+      const session = this.getSession();
+      if (session) {
+        session.user.role = role;
+        session.user.departamentos = departamentos;
+        this.saveSession(session);
+      }
+    }
+  }
+
+  /**
+   * Salva preferências pessoais (ex.: departamentos que deseja acompanhar no painel).
+   */
+  public static async savePreferences(preferencias: Record<string, any>): Promise<void> {
+    const { error } = await supabase.rpc('salvar_preferencias', { p_preferencias: preferencias });
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível salvar a preferência.'));
+    const session = this.getSession();
+    if (session) {
+      session.user.preferencias = { ...(session.user.preferencias || {}), ...preferencias };
+      this.saveSession(session);
+    }
   }
 
   public static async resetPassword(userId: string): Promise<{ tempPassword: string; message: string }> {

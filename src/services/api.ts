@@ -7,7 +7,10 @@ import {
   SurveyStatus,
   GoogleAppsScriptConfig,
   SentimentAnalysisResult,
-  AppSettings
+  AppSettings,
+  Department,
+  SurveyAccessGrant,
+  QuestionDraftPayload
 } from '../types';
 import { SUPABASE_URL, GAS_STORAGE_KEY } from './config';
 import { AuthService } from './authService';
@@ -138,6 +141,10 @@ export class ApiService {
   private static respondents: Respondent[] = [];
   private static answers: Answer[] = [];
 
+  private static departments: Department[] = [];
+  // Pesquisas liberadas para o usuário logado com permissão de exportar (acesso especial)
+  private static acessosComExportacao: Set<string> = new Set();
+
   private static lastError: string | null = null;
 
   public static init(): void {
@@ -239,7 +246,10 @@ export class ApiService {
           : { exigir_nome: true, permitir_anonimo: false, permitir_multiplas_respostas: false },
         criado_por: s.criado_por ? String(s.criado_por) : undefined,
         total_perguntas: typeof s.total_perguntas === 'number' ? s.total_perguntas : undefined,
-        total_respostas: typeof s.total_respostas === 'number' ? s.total_respostas : undefined
+        total_respostas: typeof s.total_respostas === 'number' ? s.total_respostas : undefined,
+        department_id: s.department_id ? String(s.department_id) : undefined,
+        department_nome: s.department_nome ? String(s.department_nome) : undefined,
+        visibilidade: s.visibilidade === 'restrita' ? 'restrita' : 'departamento'
       } as Survey;
     });
   }
@@ -306,7 +316,8 @@ export class ApiService {
   }> {
     this.init();
     try {
-      const [rawSurveys, rawRespondents] = await Promise.all([
+      const usuario = AuthService.getCurrentUser();
+      const [rawSurveys, rawRespondents, rawDepartments, rawAcessos] = await Promise.all([
         buscarTodasAsLinhas(() =>
           supabase.from('survey_list').select('*').order('created_at', { ascending: false }).order('id')
         ),
@@ -316,8 +327,23 @@ export class ApiService {
             .select('id, survey_id, nome, identificador, data_resposta, hora_resposta')
             .order('created_at', { ascending: true })
             .order('id')
-        )
+        ),
+        supabase.from('departments').select('*').order('nome').then((r: any) => r.data || []),
+        usuario
+          ? supabase.from('survey_access').select('survey_id, pode_exportar').eq('user_id', usuario.id).then((r: any) => r.data || [])
+          : Promise.resolve([])
       ]);
+
+      this.departments = (rawDepartments as any[]).map((d) => ({
+        id: String(d.id),
+        nome: String(d.nome || ''),
+        descricao: String(d.descricao || ''),
+        ativo: d.ativo !== false,
+        criado_em: d.criado_em || ''
+      }));
+      this.acessosComExportacao = new Set(
+        (rawAcessos as any[]).filter((a) => a.pode_exportar).map((a) => String(a.survey_id))
+      );
 
       this.surveys = this.normalizeSurveys(rawSurveys);
       this.respondents = this.normalizeRespondents(rawRespondents);
@@ -467,7 +493,7 @@ export class ApiService {
 
   public static async createSurvey(
     surveyData: Omit<Survey, 'id' | 'data_criacao'>,
-    questionsData: Array<{ question: Omit<Question, 'id' | 'survey_id'>; options: Omit<Option, 'id' | 'question_id'>[] }>
+    questionsData: QuestionDraftPayload
   ): Promise<Survey> {
     const usuario = AuthService.getCurrentUser();
     if (!usuario) throw new Error('Você não está logado.');
@@ -487,7 +513,10 @@ export class ApiService {
       data_fim: surveyData.data_fim || null,
       link_publico: link,
       configuracoes: surveyData.configuracoes || {},
-      criado_por: usuario.id
+      criado_por: usuario.id,
+      // Sem departamento informado, o banco usa o primeiro departamento do usuário
+      ...(surveyData.department_id ? { department_id: surveyData.department_id } : {}),
+      visibilidade: surveyData.visibilidade === 'restrita' ? 'restrita' : 'departamento'
     });
 
     let { error: sErr } = await supabase.from('surveys').insert(montarLinhaPesquisa(linkPublico));
@@ -563,7 +592,10 @@ export class ApiService {
       data_inicio: publicada ? dateStr : surveyData.data_inicio,
       criado_por: usuario.id,
       total_perguntas: newQuestions.length,
-      total_respostas: 0
+      total_respostas: 0,
+      department_id: surveyData.department_id,
+      department_nome: this.departments.find((d) => d.id === surveyData.department_id)?.nome,
+      visibilidade: surveyData.visibilidade === 'restrita' ? 'restrita' : 'departamento'
     };
 
     this.surveys.unshift(newSurvey);
@@ -580,8 +612,11 @@ export class ApiService {
     if (newStatus === 'Publicada' && !survey?.data_inicio) mudancas.data_inicio = hoje;
     if (newStatus === 'Encerrada') mudancas.data_fim = hoje;
 
-    const { error } = await supabase.from('surveys').update(mudancas).eq('id', surveyId);
+    const { data: alteradas, error } = await supabase.from('surveys').update(mudancas).eq('id', surveyId).select('id');
     if (error) throw new Error(mensagemDeErro(error, 'Não foi possível atualizar o status.'));
+    if (!alteradas || alteradas.length === 0) {
+      throw new Error('Você não tem permissão para alterar esta pesquisa.');
+    }
 
     if (survey) {
       survey.status = newStatus;
@@ -593,8 +628,11 @@ export class ApiService {
 
   public static async deleteSurvey(surveyId: string): Promise<boolean> {
     // Perguntas, opções, respondentes, respostas e análises saem juntos (cascata no banco)
-    const { error } = await supabase.from('surveys').delete().eq('id', surveyId);
+    const { data: excluidas, error } = await supabase.from('surveys').delete().eq('id', surveyId).select('id');
     if (error) throw new Error(mensagemDeErro(error, 'Não foi possível excluir a pesquisa.'));
+    if (!excluidas || excluidas.length === 0) {
+      throw new Error('Você não tem permissão para excluir esta pesquisa.');
+    }
 
     const qIds = new Set(this.questions.filter((q) => q.survey_id === surveyId).map((q) => q.id));
     this.surveys = this.surveys.filter((s) => s.id !== surveyId);
@@ -617,7 +655,9 @@ export class ApiService {
       descricao: original.survey.descricao,
       status: 'Rascunho',
       link_publico: `copia-${original.survey.link_publico}-${Date.now().toString(36)}`,
-      configuracoes: { ...original.survey.configuracoes }
+      configuracoes: { ...original.survey.configuracoes },
+      department_id: original.survey.department_id,
+      visibilidade: original.survey.visibilidade
     };
 
     const newQuestionsData = original.questions.map((q) => ({
@@ -635,6 +675,120 @@ export class ApiService {
     }));
 
     return this.createSurvey(newSurveyData, newQuestionsData);
+  }
+
+  /**
+   * Salva a edição completa de uma pesquisa existente (dados + perguntas + alternativas)
+   * numa única operação no banco. O ID e o link público não mudam; perguntas com
+   * respostas que forem removidas são apenas desativadas.
+   */
+  public static async updateSurveyFull(
+    surveyId: string,
+    surveyData: Omit<Survey, 'id' | 'data_criacao'>,
+    questionsData: QuestionDraftPayload
+  ): Promise<void> {
+    const perguntas = questionsData.map((q) => ({
+      id: q.question.id || '',
+      titulo: q.question.titulo,
+      descricao: q.question.descricao || '',
+      tipo: q.question.tipo,
+      obrigatoria: Boolean(q.question.obrigatoria),
+      options: q.options.map((o) => ({
+        id: o.id || '',
+        texto: o.texto,
+        valor: o.valor || o.texto,
+        ...(o.peso !== undefined ? { peso: o.peso } : {})
+      }))
+    }));
+
+    const { error } = await supabase.rpc('salvar_edicao_pesquisa', {
+      p_survey_id: surveyId,
+      p_dados: {
+        titulo: surveyData.titulo,
+        descricao: surveyData.descricao || '',
+        status: surveyData.status,
+        configuracoes: surveyData.configuracoes || {},
+        department_id: surveyData.department_id || '',
+        visibilidade: surveyData.visibilidade || ''
+      },
+      p_perguntas: perguntas
+    });
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível salvar as alterações da pesquisa.'));
+  }
+
+  // ==========================================
+  // DEPARTAMENTOS
+  // ==========================================
+
+  public static getDepartments(): Department[] {
+    return [...this.departments];
+  }
+
+  public static async fetchDepartments(): Promise<Department[]> {
+    const { data, error } = await supabase.from('departments').select('*').order('nome');
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível carregar os departamentos.'));
+    this.departments = (data || []).map((d: any) => ({
+      id: String(d.id),
+      nome: String(d.nome || ''),
+      descricao: String(d.descricao || ''),
+      ativo: d.ativo !== false,
+      criado_em: d.criado_em || ''
+    }));
+    return this.getDepartments();
+  }
+
+  public static async createDepartment(nome: string, descricao: string): Promise<void> {
+    const { error } = await supabase.from('departments').insert({ nome: nome.trim(), descricao: descricao.trim() });
+    if (error) {
+      if ((error as any).code === '23505') throw new Error('Já existe um departamento com este nome.');
+      throw new Error(mensagemDeErro(error, 'Não foi possível criar o departamento.'));
+    }
+  }
+
+  public static async updateDepartment(id: string, mudancas: Partial<Pick<Department, 'nome' | 'descricao' | 'ativo'>>): Promise<void> {
+    const { data, error } = await supabase.from('departments').update(mudancas).eq('id', id).select('id');
+    if (error) {
+      if ((error as any).code === '23505') throw new Error('Já existe um departamento com este nome.');
+      throw new Error(mensagemDeErro(error, 'Não foi possível atualizar o departamento.'));
+    }
+    if (!data || data.length === 0) throw new Error('Você não tem permissão para alterar departamentos.');
+  }
+
+  // ==========================================
+  // ACESSO ESPECIAL (liberar uma pesquisa para uma pessoa)
+  // ==========================================
+
+  public static podeExportarComoEspecial(): Set<string> {
+    return new Set(this.acessosComExportacao);
+  }
+
+  public static async listSurveyAccess(surveyId: string): Promise<SurveyAccessGrant[]> {
+    const { data, error } = await supabase
+      .from('survey_access')
+      .select('survey_id, user_id, pode_exportar, criado_em')
+      .eq('survey_id', surveyId)
+      .order('criado_em');
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível carregar os acessos.'));
+    return (data || []).map((a: any) => ({
+      survey_id: String(a.survey_id),
+      user_id: String(a.user_id),
+      pode_exportar: Boolean(a.pode_exportar),
+      criado_em: a.criado_em || ''
+    }));
+  }
+
+  public static async grantSurveyAccess(surveyId: string, userId: string, podeExportar: boolean): Promise<void> {
+    const usuario = AuthService.getCurrentUser();
+    const { error } = await supabase.from('survey_access').upsert(
+      { survey_id: surveyId, user_id: userId, pode_exportar: podeExportar, concedido_por: usuario?.id || null },
+      { onConflict: 'survey_id,user_id' }
+    );
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível liberar o acesso.'));
+  }
+
+  public static async revokeSurveyAccess(surveyId: string, userId: string): Promise<void> {
+    const { error } = await supabase.from('survey_access').delete().eq('survey_id', surveyId).eq('user_id', userId);
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível remover o acesso.'));
   }
 
   // ==========================================
@@ -728,8 +882,9 @@ export class ApiService {
     if (!data) throw new Error('Pesquisa não encontrada.');
 
     const configuracoes = { ...(data.configuracoes || {}), contexto_ia: String(contextoIA || '').trim() };
-    const { error: upErr } = await supabase.from('surveys').update({ configuracoes }).eq('id', surveyId);
+    const { data: alteradas, error: upErr } = await supabase.from('surveys').update({ configuracoes }).eq('id', surveyId).select('id');
     if (upErr) throw new Error(mensagemDeErro(upErr, 'Não foi possível salvar o contexto.'));
+    if (!alteradas || alteradas.length === 0) throw new Error('Você não tem permissão para alterar esta pesquisa.');
 
     const survey = this.surveys.find((s) => s.id === surveyId);
     if (survey) survey.configuracoes = { ...survey.configuracoes, contexto_ia: configuracoes.contexto_ia };
