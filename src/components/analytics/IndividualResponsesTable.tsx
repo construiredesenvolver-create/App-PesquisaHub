@@ -14,8 +14,12 @@ import {
   Calendar, 
   Clock, 
   FileText,
-  UserCheck
+  UserCheck,
+  Trash2,
+  Loader2,
+  CopyCheck
 } from 'lucide-react';
+import { detectarDuplicadas } from '../../services/analiseAvancada';
 
 interface IndividualResponsesTableProps {
   surveyTitle: string;
@@ -24,6 +28,9 @@ interface IndividualResponsesTableProps {
   respondents: Respondent[];
   answers: Answer[];
   onExportCSV: () => void;
+  // Excluir uma resposta feita por engano (Administrador e Gestor do departamento)
+  podeExcluir?: boolean;
+  onDeleteRespondent?: (respondent: Respondent) => Promise<void>;
 }
 
 export const IndividualResponsesTable: React.FC<IndividualResponsesTableProps> = ({
@@ -32,16 +39,43 @@ export const IndividualResponsesTable: React.FC<IndividualResponsesTableProps> =
   options,
   respondents,
   answers,
-  onExportCSV
+  onExportCSV,
+  podeExcluir = false,
+  onDeleteRespondent
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedRespondent, setSelectedRespondent] = useState<Respondent | null>(null);
+  const [soDuplicadas, setSoDuplicadas] = useState(false);
+  const [excluindoId, setExcluindoId] = useState<string | null>(null);
+  const [erroExclusao, setErroExclusao] = useState<string | null>(null);
+
+  const duplicadas = detectarDuplicadas(respondents);
 
   // Filtragem
   const filteredRespondents = respondents.filter((r) =>
-    r.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (r.identificador && r.identificador.toLowerCase().includes(searchTerm.toLowerCase()))
+    (!soDuplicadas || duplicadas.has(r.id)) &&
+    (r.nome.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (r.identificador && r.identificador.toLowerCase().includes(searchTerm.toLowerCase())))
   );
+
+  const handleExcluir = async (resp: Respondent) => {
+    if (!onDeleteRespondent) return;
+    const ok = window.confirm(
+      `Excluir a resposta de "${resp.nome}" (${resp.data_resposta}${resp.hora_resposta ? ' às ' + resp.hora_resposta : ''})?\n\n` +
+      'Todas as respostas desta pessoa nesta pesquisa serão apagadas. Esta ação não pode ser desfeita.'
+    );
+    if (!ok) return;
+    setExcluindoId(resp.id);
+    setErroExclusao(null);
+    try {
+      await onDeleteRespondent(resp);
+      if (selectedRespondent?.id === resp.id) setSelectedRespondent(null);
+    } catch (err: any) {
+      setErroExclusao(err.message || 'Não foi possível excluir a resposta.');
+    } finally {
+      setExcluindoId(null);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -60,6 +94,18 @@ export const IndividualResponsesTable: React.FC<IndividualResponsesTableProps> =
         </div>
 
         <div className="flex items-center gap-2 self-end sm:self-auto">
+          {duplicadas.size > 0 && (
+            <button
+              onClick={() => setSoDuplicadas((v) => !v)}
+              className={`px-3 py-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                soDuplicadas ? 'bg-amber-500 border-amber-500 text-white' : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+              }`}
+              title="Mostrar só as respostas com o mesmo nome ou identificador"
+            >
+              <CopyCheck className="w-3.5 h-3.5" />
+              <span>Possíveis duplicadas ({duplicadas.size})</span>
+            </button>
+          )}
           <span className="text-xs text-slate-500 font-semibold">
             {filteredRespondents.length} de {respondents.length} respondentes
           </span>
@@ -72,6 +118,10 @@ export const IndividualResponsesTable: React.FC<IndividualResponsesTableProps> =
           </button>
         </div>
       </div>
+
+      {erroExclusao && (
+        <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-medium rounded-xl px-4 py-3">{erroExclusao}</div>
+      )}
 
       {/* Tabela de Respondentes */}
       <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xs overflow-hidden">
@@ -105,6 +155,14 @@ export const IndividualResponsesTable: React.FC<IndividualResponsesTableProps> =
                           {resp.nome.charAt(0).toUpperCase()}
                         </div>
                         <span>{resp.nome}</span>
+                        {duplicadas.has(resp.id) && (
+                          <span
+                            className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800"
+                            title={`${duplicadas.get(resp.id)} respostas com o mesmo nome ou identificador`}
+                          >
+                            Possível duplicada
+                          </span>
+                        )}
                       </td>
 
                       <td className="p-4 text-slate-500 font-mono">
@@ -135,6 +193,16 @@ export const IndividualResponsesTable: React.FC<IndividualResponsesTableProps> =
                           <Eye className="w-3.5 h-3.5" />
                           <span>Ver Respostas</span>
                         </button>
+                        {podeExcluir && onDeleteRespondent && (
+                          <button
+                            onClick={() => handleExcluir(resp)}
+                            disabled={excluindoId === resp.id}
+                            title="Excluir esta resposta"
+                            className="ml-1.5 p-1.5 rounded-lg text-slate-400 hover:bg-rose-50 hover:text-rose-600 inline-flex align-middle disabled:opacity-50"
+                          >
+                            {excluindoId === resp.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );

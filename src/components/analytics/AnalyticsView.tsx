@@ -15,7 +15,9 @@ import {
   X,
   RotateCcw,
   SlidersHorizontal,
-  Download
+  Download,
+  Grid3x3,
+  UsersRound
 } from 'lucide-react';
 import { 
   Survey, 
@@ -31,6 +33,9 @@ import { SentimentAnalysisView } from './SentimentAnalysisView';
 import { CrossTabulationView } from './CrossTabulationView';
 import { IndividualResponsesTable } from './IndividualResponsesTable';
 import { ExportReportView } from './ExportReportView';
+import { CompetencyMatrixView } from './CompetencyMatrixView';
+import { AdesaoView } from './AdesaoView';
+import { detectarEscala } from '../../services/analiseAvancada';
 import { DrillDownDrawer } from './DrillDownDrawer';
 import { DrillDownTarget } from '../../types';
 
@@ -47,9 +52,14 @@ interface AnalyticsViewProps {
   // Acesso especial: só visualiza (sem compartilhar) e exporta apenas se liberado
   somenteLeitura?: boolean;
   podeExportar?: boolean;
+  // Excluir respostas feitas por engano (Administrador e Gestor)
+  podeExcluirRespostas?: boolean;
+  onDeleteRespondent?: (respondent: Respondent) => Promise<void>;
+  // Lista de pessoas esperadas (aba Adesão)
+  onSalvarPublicoEsperado?: (lista: string[]) => Promise<void>;
 }
 
-export type AnalyticsTab = 'questions' | 'crosstab' | 'respondents' | 'sentiment' | 'report';
+export type AnalyticsTab = 'questions' | 'crosstab' | 'respondents' | 'competencias' | 'adesao' | 'sentiment' | 'report';
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   survey,
@@ -62,7 +72,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   onOpenPublicView,
   onExportCSV,
   somenteLeitura = false,
-  podeExportar = true
+  podeExportar = true,
+  podeExcluirRespostas = false,
+  onDeleteRespondent,
+  onSalvarPublicoEsperado
 }) => {
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('questions');
   const [showFilters, setShowFilters] = useState(false);
@@ -163,6 +176,12 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   }, [survey, questions, options, respondents, answers, filterDateFrom, filterDateTo, filterRespondent, questionFilters]);
 
   const { executiveSummary, questionAnalytics } = analyticsData;
+
+  // Escala comum entre várias perguntas (ex.: Autoavaliação 1–4) habilita a Matriz de Competências
+  const escala = useMemo(() => detectarEscala(questions, options), [questions, options]);
+  const publicoEsperado: string[] = Array.isArray((survey.configuracoes as any)?.publico_esperado)
+    ? (survey.configuracoes as any).publico_esperado
+    : [];
 
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-200">
@@ -312,6 +331,32 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-700">
               {analyticsData.respondents.length}
             </span>
+          </button>
+
+          {escala && (
+            <button
+              onClick={() => setActiveTab('competencias')}
+              className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
+                activeTab === 'competencias'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Grid3x3 className="w-4 h-4" />
+              <span>Matriz de Competências</span>
+            </button>
+          )}
+
+          <button
+            onClick={() => setActiveTab('adesao')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
+              activeTab === 'adesao'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+            }`}
+          >
+            <UsersRound className="w-4 h-4" />
+            <span>Adesão</span>
           </button>
 
           <button
@@ -497,6 +542,28 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           respondents={analyticsData.respondents}
           answers={analyticsData.answers}
           onExportCSV={() => onExportCSV(survey.id)}
+          podeExcluir={podeExcluirRespostas}
+          onDeleteRespondent={onDeleteRespondent}
+        />
+      )}
+
+      {activeTab === 'competencias' && escala && (
+        <CompetencyMatrixView
+          escala={escala}
+          options={options}
+          respondents={analyticsData.respondents}
+          answers={analyticsData.answers}
+        />
+      )}
+
+      {activeTab === 'adesao' && (
+        <AdesaoView
+          respondents={respondents}
+          publicoEsperado={publicoEsperado}
+          podeEditar={!somenteLeitura && !!onSalvarPublicoEsperado}
+          onSalvarPublico={async (lista) => {
+            if (onSalvarPublicoEsperado) await onSalvarPublicoEsperado(lista);
+          }}
         />
       )}
 
