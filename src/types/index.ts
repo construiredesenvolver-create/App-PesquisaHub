@@ -20,6 +20,7 @@ export interface SurveySettings {
   publico_esperado?: string[]; // nomes de quem deve responder (aba Adesão)
   uma_resposta_por_pessoa?: boolean; // bloqueia uma segunda resposta com o mesmo nome
   restringir_a_lista?: boolean; // só aceita nomes da lista de Adesão
+  serie_id?: string; // liga reaplicações da mesma pesquisa (aba Evolução)
 }
 
 export interface Survey {
