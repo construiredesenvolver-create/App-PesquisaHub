@@ -26,7 +26,8 @@ interface PublicSurveyViewProps {
     surveyId: string,
     respondentName: string,
     answers: Record<string, string | string[]>,
-    identificador?: string
+    identificador?: string,
+    extra?: { hp?: string }
   ) => Promise<{ success: boolean; message: string }>;
   onBackToAdmin?: () => void;
   logoUrl?: string;
@@ -42,6 +43,8 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
 }) => {
   const [nome, setNome] = useState('');
   const [identificador, setIdentificador] = useState('');
+  // Campo invisível contra robôs (pessoas não veem nem preenchem)
+  const [hp, setHp] = useState('');
   const [currentStep, setCurrentStep] = useState<number>(0); // 0 = Identificação (Nome), 1..N = Perguntas
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -267,7 +270,7 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
 
     setSubmitting(true);
     try {
-      const result = await onSubmitResponse(survey.id, nome, answers, identificador);
+      const result = await onSubmitResponse(survey.id, nome, answers, identificador, { hp });
       if (result.success) {
         setSubmitted(true);
         setSuccessMessage(result.message);
@@ -300,7 +303,18 @@ export const PublicSurveyView: React.FC<PublicSurveyViewProps> = ({
 
   return (
     <div className="min-h-screen bg-slate-50/70 text-slate-900 font-sans flex flex-col justify-between py-6 md:py-10 px-4">
-      
+      {/* Campo invisível contra robôs: fica fora da tela e fora da navegação por teclado */}
+      <input
+        type="text"
+        name="website"
+        value={hp}
+        onChange={(e) => setHp(e.target.value)}
+        tabIndex={-1}
+        autoComplete="off"
+        aria-hidden="true"
+        style={{ position: 'absolute', left: '-10000px', width: 1, height: 1, opacity: 0 }}
+      />
+
       {/* Container Central */}
       <div className="max-w-2xl w-full mx-auto space-y-6">
         

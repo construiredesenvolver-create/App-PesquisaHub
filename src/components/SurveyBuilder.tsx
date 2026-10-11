@@ -61,6 +61,9 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
   const [descricao, setDescricao] = useState(initialSurvey?.descricao || '');
   const [categoria, setCategoria] = useState(initialSurvey?.configuracoes?.categoria || 'Geral');
   const [exigirNome, setExigirNome] = useState(initialSurvey?.configuracoes?.exigir_nome !== false);
+  const [umaRespostaPorPessoa, setUmaRespostaPorPessoa] = useState(!!initialSurvey?.configuracoes?.uma_resposta_por_pessoa);
+  const [restringirALista, setRestringirALista] = useState(!!initialSurvey?.configuracoes?.restringir_a_lista);
+  const temListaAdesao = (initialSurvey?.configuracoes?.publico_esperado || []).length > 0;
   const [mensagemConclusao, setMensagemConclusao] = useState(
     initialSurvey?.configuracoes?.mensagem_conclusao || 'Obrigado por enviar suas respostas!'
   );
@@ -293,7 +296,9 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
         permitir_anonimo: !exigirNome,
         permitir_multiplas_respostas: false,
         categoria,
-        mensagem_conclusao: mensagemConclusao.trim()
+        mensagem_conclusao: mensagemConclusao.trim(),
+        uma_resposta_por_pessoa: umaRespostaPorPessoa,
+        restringir_a_lista: restringirALista
       },
       department_id: departmentId || undefined,
       visibilidade
@@ -460,6 +465,40 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
                   className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300"
                 />
                 <span>Exigir Identificação / Nome do Respondente</span>
+              </label>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 space-y-2">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Controle de respostas</div>
+              <label className="flex items-start gap-2 cursor-pointer text-xs font-medium text-slate-700 select-none">
+                <input
+                  type="checkbox"
+                  checked={umaRespostaPorPessoa}
+                  onChange={(e) => setUmaRespostaPorPessoa(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 rounded text-blue-600 focus:ring-blue-500 border-slate-300"
+                />
+                <span>
+                  Permitir só uma resposta por pessoa
+                  <span className="block text-[11px] font-normal text-slate-500">
+                    Uma segunda resposta com o mesmo nome é recusada (evita duplicadas).
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 cursor-pointer text-xs font-medium text-slate-700 select-none">
+                <input
+                  type="checkbox"
+                  checked={restringirALista}
+                  onChange={(e) => setRestringirALista(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 rounded text-blue-600 focus:ring-blue-500 border-slate-300"
+                />
+                <span>
+                  Aceitar respostas só de quem está na lista de Adesão
+                  <span className="block text-[11px] font-normal text-slate-500">
+                    {temListaAdesao
+                      ? 'Usa a lista informada na aba Adesão (aceita nome incompleto, como "Josiel" para "Josiel Rodrigues").'
+                      : 'A lista é informada na aba Adesão da pesquisa. Enquanto não houver lista, ninguém é bloqueado.'}
+                  </span>
+                </span>
               </label>
             </div>
 
