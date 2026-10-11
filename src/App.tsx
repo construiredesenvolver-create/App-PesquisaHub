@@ -397,6 +397,21 @@ export function App() {
     showToast('Lista de pessoas esperadas salva.');
   };
 
+  // Cores escolhidas para as alternativas dos gráficos (valem para a pesquisa inteira)
+  const handleSalvarCores = async (surveyId: string, mudancas: Record<string, string>) => {
+    const alvo = surveys.find((s) => s.id === surveyId);
+    const cores: Record<string, string> = { ...(alvo?.configuracoes?.cores_opcoes || {}) };
+    Object.entries(mudancas).forEach(([chave, cor]) => {
+      if (cor) cores[chave] = cor;
+      else delete cores[chave];
+    });
+    await ApiService.updateSurveyConfiguracoes(surveyId, { cores_opcoes: cores });
+    setSurveys((prev) =>
+      prev.map((s) => (s.id === surveyId ? { ...s, configuracoes: { ...s.configuracoes, cores_opcoes: cores } } : s))
+    );
+    showToast('Cores salvas.');
+  };
+
   // Filtro de departamentos do painel (salvo como preferência pessoal)
   const handleFiltroDepartamentos = (ids: string[]) => {
     setFiltroDepartamentos(ids);
@@ -736,6 +751,7 @@ export function App() {
                   podeExcluirRespostas={podeExcluirPesquisa(currentUser, activeSurvey)}
                   onDeleteRespondent={handleDeleteRespondent}
                   onSalvarPublicoEsperado={(lista) => handleSalvarPublicoEsperado(activeSurvey.id, lista)}
+                  onSalvarCores={(mudancas) => handleSalvarCores(activeSurvey.id, mudancas)}
                 />
               )
             ) : (
