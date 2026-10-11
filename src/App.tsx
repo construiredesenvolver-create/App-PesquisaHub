@@ -397,13 +397,14 @@ export function App() {
     surveyId: string,
     respondentName: string,
     answersMap: Record<string, string | string[]>,
-    identificador?: string
+    identificador?: string,
+    extra?: { hp?: string }
   ) => {
     // Observação: não recarregamos os dados administrativos aqui — quem responde
     // a pesquisa não está logado e não vê o painel, então não há nada para
     // atualizar nesta sessão. Isso também evita uma chamada extra ao Apps Script
     // logo após o envio, na hora em que ele está mais ocupado gravando a resposta.
-    return ApiService.submitResponse(surveyId, respondentName, answersMap, identificador);
+    return ApiService.submitResponse(surveyId, respondentName, answersMap, identificador, extra);
   };
 
   // Exportação CSV com dados reais
