@@ -63,6 +63,8 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
   const [exigirNome, setExigirNome] = useState(initialSurvey?.configuracoes?.exigir_nome !== false);
   const [umaRespostaPorPessoa, setUmaRespostaPorPessoa] = useState(!!initialSurvey?.configuracoes?.uma_resposta_por_pessoa);
   const [restringirALista, setRestringirALista] = useState(!!initialSurvey?.configuracoes?.restringir_a_lista);
+  const [dataFim, setDataFim] = useState<string>(initialSurvey?.data_fim || '');
+  const hojeLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0];
   const temListaAdesao = (initialSurvey?.configuracoes?.publico_esperado || []).length > 0;
   const [mensagemConclusao, setMensagemConclusao] = useState(
     initialSurvey?.configuracoes?.mensagem_conclusao || 'Obrigado por enviar suas respostas!'
@@ -279,6 +281,11 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
       }
     }
 
+    if (dataFim && status === 'Publicada' && dataFim < hojeLocal) {
+      setValidationError('A data de encerramento já passou. Escolha uma data futura ou deixe em branco.');
+      return;
+    }
+
     if (opcoesDepartamento.length > 0 && !departmentId) {
       setValidationError('Escolha o departamento da pesquisa.');
       return;
@@ -301,7 +308,8 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
         restringir_a_lista: restringirALista
       },
       department_id: departmentId || undefined,
-      visibilidade
+      visibilidade,
+      data_fim: dataFim || undefined
     };
 
     const questionsData: QuestionDraftPayload = questions.map((q, idx) => ({
@@ -470,6 +478,29 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
 
             <div className="pt-2 border-t border-slate-100 space-y-2">
               <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Controle de respostas</div>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                <label className="text-xs font-medium text-slate-700" htmlFor="data-fim-pesquisa">Encerrar automaticamente em</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="data-fim-pesquisa"
+                    type="date"
+                    value={dataFim}
+                    min={hojeLocal}
+                    onChange={(e) => setDataFim(e.target.value)}
+                    className="text-xs text-slate-800 border border-slate-200 rounded-xl px-3 py-1.5 bg-white"
+                  />
+                  {dataFim && (
+                    <button type="button" onClick={() => setDataFim('')} className="text-[11px] font-semibold text-slate-500 hover:text-slate-800">
+                      Remover data
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-500 -mt-1">
+                {dataFim
+                  ? 'Aceita respostas até o fim desse dia; depois disso a pesquisa é encerrada sozinha.'
+                  : 'Sem data: a pesquisa fica aberta até ser encerrada manualmente.'}
+              </p>
               <label className="flex items-start gap-2 cursor-pointer text-xs font-medium text-slate-700 select-none">
                 <input
                   type="checkbox"

@@ -11,11 +11,12 @@ import {
   LogOut,
   ShieldCheck,
   User as UserIcon,
-  Building2
+  Building2,
+  History
 } from 'lucide-react';
 import { Survey, AppUser, ROLE_LABELS } from '../types';
 
-export type NavTab = 'dashboard' | 'surveys' | 'builder' | 'analytics' | 'settings' | 'users' | 'departments';
+export type NavTab = 'dashboard' | 'surveys' | 'builder' | 'analytics' | 'settings' | 'users' | 'departments' | 'audit';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -196,6 +197,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <div className="flex items-center gap-2.5">
                   <Users className="w-4 h-4 text-purple-400" />
                   <span>Usuários</span>
+                </div>
+              </button>
+            )}
+
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  onTabChange('audit');
+                  onCloseMobile();
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium transition-colors ${
+                  activeTab === 'audit'
+                    ? 'bg-slate-800 text-white font-semibold border-l-2 border-blue-500'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <History className="w-4 h-4 text-amber-300" />
+                  <span>Auditoria</span>
                 </div>
               </button>
             )}

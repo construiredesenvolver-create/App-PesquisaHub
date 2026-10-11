@@ -312,6 +312,17 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                       </span>
                     )}
 
+                    {/* Encerramento programado */}
+                    {isPublished && survey.data_fim && (
+                      <span
+                        className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-100 flex items-center gap-1"
+                        title="A pesquisa será encerrada automaticamente depois desta data"
+                      >
+                        <Clock className="w-3 h-3" />
+                        Encerra em {survey.data_fim.split('-').reverse().join('/')}
+                      </span>
+                    )}
+
                     {/* Categoria */}
                     {survey.configuracoes?.categoria && (
                       <span className="text-[11px] font-medium px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
