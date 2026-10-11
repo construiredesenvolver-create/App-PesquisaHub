@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Plus, 
   Trash2, 
@@ -22,7 +22,7 @@ import {
   ChevronDown,
   Loader2
 } from 'lucide-react';
-import { Survey, Question, Option, QuestionType } from '../types';
+import { Survey, Question, Option, QuestionType, Department, SurveyVisibility, QuestionDraftPayload } from '../types';
 import { generateId } from '../services/api';
 
 interface QuestionDraft {
@@ -41,9 +41,11 @@ interface SurveyBuilderProps {
   isSaving?: boolean;
   onSaveSurvey: (
     surveyData: Omit<Survey, 'id' | 'data_criacao'>,
-    questionsData: Array<{ question: Omit<Question, 'id' | 'survey_id'>; options: Omit<Option, 'id' | 'question_id'>[] }>
+    questionsData: QuestionDraftPayload
   ) => Promise<void> | void;
   onCancel: () => void;
+  // Departamentos onde a pessoa pode criar/mover pesquisas
+  departamentosDisponiveis?: Department[];
 }
 
 export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
@@ -52,7 +54,8 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
   initialOptions = [],
   isSaving = false,
   onSaveSurvey,
-  onCancel
+  onCancel,
+  departamentosDisponiveis = []
 }) => {
   const [titulo, setTitulo] = useState(initialSurvey?.titulo || '');
   const [descricao, setDescricao] = useState(initialSurvey?.descricao || '');
@@ -62,6 +65,22 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
     initialSurvey?.configuracoes?.mensagem_conclusao || 'Obrigado por enviar suas respostas!'
   );
   const [activeTab, setActiveTab] = useState<'editor' | 'preview'>('editor');
+  const [departmentId, setDepartmentId] = useState<string>(
+    initialSurvey?.department_id || departamentosDisponiveis[0]?.id || ''
+  );
+  const [visibilidade, setVisibilidade] = useState<SurveyVisibility>(initialSurvey?.visibilidade || 'departamento');
+  // Ao editar, o departamento atual pode não estar na lista (ex.: departamento desativado)
+  const opcoesDepartamento: Department[] = initialSurvey?.department_id && !departamentosDisponiveis.some((d) => d.id === initialSurvey.department_id)
+    ? [{ id: initialSurvey.department_id, nome: initialSurvey.department_nome || 'Departamento atual', descricao: '', ativo: true }, ...departamentosDisponiveis]
+    : departamentosDisponiveis;
+  const totalRespostasExistentes = initialSurvey?.total_respostas || 0;
+
+  // Se a lista de departamentos chegar depois da tela abrir, já seleciona o primeiro
+  useEffect(() => {
+    if (!departmentId && opcoesDepartamento.length > 0) {
+      setDepartmentId(opcoesDepartamento[0].id);
+    }
+  }, [opcoesDepartamento.length]);
 
   // Inicializar perguntas a partir dos dados existentes ou padrão inicial
   const [questions, setQuestions] = useState<QuestionDraft[]>(() => {
@@ -257,6 +276,11 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
       }
     }
 
+    if (opcoesDepartamento.length > 0 && !departmentId) {
+      setValidationError('Escolha o departamento da pesquisa.');
+      return;
+    }
+
     setValidationError(null);
 
     const surveyData: Omit<Survey, 'id' | 'data_criacao'> = {
@@ -270,11 +294,14 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
         permitir_multiplas_respostas: false,
         categoria,
         mensagem_conclusao: mensagemConclusao.trim()
-      }
+      },
+      department_id: departmentId || undefined,
+      visibilidade
     };
 
-    const questionsData = questions.map((q, idx) => ({
+    const questionsData: QuestionDraftPayload = questions.map((q, idx) => ({
       question: {
+        id: q.id,
         ordem: idx + 1,
         titulo: q.titulo.trim(),
         descricao: q.descricao.trim(),
@@ -283,6 +310,7 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
         ativa: true
       },
       options: q.options.map((opt, optIdx) => ({
+        id: opt.id,
         ordem: optIdx + 1,
         texto: opt.texto.trim(),
         valor: opt.valor.trim() || opt.texto.trim()
@@ -434,6 +462,42 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
                 <span>Exigir Identificação / Nome do Respondente</span>
               </label>
             </div>
+
+            {opcoesDepartamento.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-slate-100">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Departamento</label>
+                  <select
+                    value={departmentId}
+                    onChange={(e) => setDepartmentId(e.target.value)}
+                    className="w-full text-xs text-slate-800 border border-slate-200 rounded-xl px-3 py-2 bg-white"
+                  >
+                    {opcoesDepartamento.map((d) => (
+                      <option key={d.id} value={d.id}>{d.nome}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Quem vê os resultados</label>
+                  <select
+                    value={visibilidade}
+                    onChange={(e) => setVisibilidade(e.target.value as SurveyVisibility)}
+                    className="w-full text-xs text-slate-800 border border-slate-200 rounded-xl px-3 py-2 bg-white"
+                  >
+                    <option value="departamento">Gestores e Líderes do departamento</option>
+                    <option value="restrita">Restrita: só Administradores e Gestores</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {initialSurvey && totalRespostasExistentes > 0 && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-800 leading-relaxed">
+                Esta pesquisa já tem <strong>{totalRespostasExistentes}</strong> resposta(s). O link público continua o
+                mesmo. Perguntas removidas deixam de aparecer, mas as respostas já dadas ficam guardadas. Alternativas que
+                já receberam respostas não podem ser excluídas — renomeie-as se precisar.
+              </div>
+            )}
           </div>
 
           {/* Lista de Perguntas */}

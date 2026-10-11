@@ -19,9 +19,27 @@ import {
   AlertTriangle,
   RefreshCw,
   Clock,
-  Eye
+  Eye,
+  KeyRound,
+  Lock,
+  Building2
 } from 'lucide-react';
 import { Survey, SurveyStatus, Respondent, Question } from '../types';
+
+/** Permissões que a lista usa para mostrar/esconder ações (o banco valida de novo). */
+export interface SurveyListPermissions {
+  podeCriar: boolean;
+  podeEditar: (survey: Survey) => boolean;
+  podeExcluir: (survey: Survey) => boolean;
+  podeLiberar: (survey: Survey) => boolean;
+}
+
+const PERMISSOES_PADRAO: SurveyListPermissions = {
+  podeCriar: true,
+  podeEditar: () => true,
+  podeExcluir: () => true,
+  podeLiberar: () => false
+};
 
 interface SurveyListProps {
   surveys: Survey[];
@@ -38,6 +56,9 @@ interface SurveyListProps {
   onShareSurvey: (survey: Survey) => void;
   onOpenPublicView: (surveyId: string) => void;
   onOpenNewSurvey: () => void;
+  permissoes?: SurveyListPermissions;
+  onManageAccess?: (survey: Survey) => void;
+  mostrarDepartamento?: boolean;
 }
 
 export const SurveyList: React.FC<SurveyListProps> = ({
@@ -54,7 +75,10 @@ export const SurveyList: React.FC<SurveyListProps> = ({
   onDeleteSurvey,
   onShareSurvey,
   onOpenPublicView,
-  onOpenNewSurvey
+  onOpenNewSurvey,
+  permissoes = PERMISSOES_PADRAO,
+  onManageAccess,
+  mostrarDepartamento = false
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('Todos');
@@ -116,13 +140,15 @@ export const SurveyList: React.FC<SurveyListProps> = ({
             </button>
           )}
 
-          <button
-            onClick={onOpenNewSurvey}
-            className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs md:text-sm flex items-center justify-center gap-2 shadow-md shadow-blue-600/20 transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Criar Pesquisa</span>
-          </button>
+          {permissoes.podeCriar && (
+            <button
+              onClick={onOpenNewSurvey}
+              className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs md:text-sm flex items-center justify-center gap-2 shadow-md shadow-blue-600/20 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Criar Pesquisa</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -185,15 +211,20 @@ export const SurveyList: React.FC<SurveyListProps> = ({
         <div className="bg-white rounded-2xl p-12 text-center border border-slate-200/80 space-y-3">
           <Loader2 className="w-8 h-8 mx-auto text-blue-600 animate-spin" />
           <h3 className="font-bold text-slate-800 text-sm">Carregando pesquisas...</h3>
-          <p className="text-xs text-slate-500">Buscando questionários e respostas atualizadas diretamente da planilha.</p>
+          <p className="text-xs text-slate-500">Buscando questionários e respostas atualizadas.</p>
         </div>
       ) : surveys.length === 0 ? (
         <div className="bg-white rounded-2xl p-12 text-center border border-slate-200/80 space-y-3">
           <Layers className="w-12 h-12 mx-auto text-slate-300" />
-          <h3 className="font-bold text-slate-800 text-base">Nenhuma pesquisa criada ainda</h3>
+          <h3 className="font-bold text-slate-800 text-base">
+            {permissoes.podeCriar ? 'Nenhuma pesquisa criada ainda' : 'Nenhuma pesquisa disponível para você'}
+          </h3>
           <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Seu banco de dados está pronto. Crie seu primeiro formulário para gerar links públicos e coletar dados em tempo real.
+            {permissoes.podeCriar
+              ? 'Crie seu primeiro formulário para gerar links públicos e coletar dados em tempo real.'
+              : 'Quando uma pesquisa for liberada para você, ela aparecerá aqui.'}
           </p>
+          {permissoes.podeCriar && (
           <button
             onClick={onOpenNewSurvey}
             className="mt-2 px-5 py-2.5 rounded-xl bg-blue-600 text-white font-semibold text-xs inline-flex items-center gap-2 hover:bg-blue-700 shadow-md shadow-blue-600/20 transition-all"
@@ -201,6 +232,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
             <Plus className="w-4 h-4" />
             <span>Criar Primeira Pesquisa</span>
           </button>
+          )}
         </div>
       ) : filteredSurveys.length === 0 ? (
         <div className="bg-white rounded-2xl p-12 text-center border border-slate-200/80 space-y-3">
@@ -236,6 +268,9 @@ export const SurveyList: React.FC<SurveyListProps> = ({
             const isPublished = normalized === 'Publicada';
             const isClosed = normalized === 'Encerrada';
             const isDraft = normalized === 'Rascunho';
+            const podeEditar = permissoes.podeEditar(survey);
+            const podeExcluir = permissoes.podeExcluir(survey);
+            const podeLiberar = !!onManageAccess && permissoes.podeLiberar(survey);
 
             return (
               <div
@@ -257,6 +292,25 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                     >
                       {survey.status}
                     </span>
+
+                    {/* Departamento */}
+                    {mostrarDepartamento && survey.department_nome && (
+                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-100 flex items-center gap-1">
+                        <Building2 className="w-3 h-3" />
+                        {survey.department_nome}
+                      </span>
+                    )}
+
+                    {/* Restrita */}
+                    {survey.visibilidade === 'restrita' && (
+                      <span
+                        className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-100 flex items-center gap-1"
+                        title="Resultados visíveis só para Administradores e Gestores do departamento"
+                      >
+                        <Lock className="w-3 h-3" />
+                        Restrita
+                      </span>
+                    )}
 
                     {/* Categoria */}
                     {survey.configuracoes?.categoria && (
@@ -318,7 +372,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                   </button>
 
                   {/* Botão Publicar / Pausar / Rascunho Rápido */}
-                  {isDraft && (
+                  {podeEditar && isDraft && (
                     <button
                       onClick={() => onToggleStatus(survey.id, 'Publicada')}
                       className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 transition-colors shadow-xs"
@@ -329,7 +383,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                     </button>
                   )}
 
-                  {isPublished && (
+                  {podeEditar && isPublished && (
                     <button
                       onClick={() => onToggleStatus(survey.id, 'Encerrada')}
                       className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition-colors"
@@ -340,7 +394,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                     </button>
                   )}
 
-                  {isClosed && (
+                  {podeEditar && isClosed && (
                     <button
                       onClick={() => onToggleStatus(survey.id, 'Publicada')}
                       className="px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-semibold text-xs flex items-center gap-1.5 transition-colors"
@@ -352,14 +406,16 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                   )}
 
                   {/* Compartilhar / Link Público */}
-                  <button
-                    onClick={() => onShareSurvey(survey)}
-                    className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
-                    title="Compartilhar link de resposta anônima"
-                  >
-                    <Share2 className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Compartilhar</span>
-                  </button>
+                  {podeEditar && (
+                    <button
+                      onClick={() => onShareSurvey(survey)}
+                      className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
+                      title="Compartilhar link de resposta anônima"
+                    >
+                      <Share2 className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Compartilhar</span>
+                    </button>
+                  )}
 
                   {/* Menu Dropdown de Mais Ações */}
                   <div className="relative">
@@ -384,6 +440,7 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                           <span>Abrir Formulário</span>
                         </button>
 
+                        {podeEditar && (
                         <button
                           onClick={() => {
                             setOpenMenuId(null);
@@ -392,9 +449,24 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                           className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2"
                         >
                           <Edit3 className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Editar Perguntas</span>
+                          <span>Editar Pesquisa</span>
                         </button>
+                        )}
 
+                        {podeLiberar && (
+                          <button
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              onManageAccess!(survey);
+                            }}
+                            className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                          >
+                            <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+                            <span>Acessos especiais</span>
+                          </button>
+                        )}
+
+                        {permissoes.podeCriar && (
                         <button
                           onClick={() => {
                             setOpenMenuId(null);
@@ -405,8 +477,9 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                           <Copy className="w-3.5 h-3.5 text-slate-500" />
                           <span>Duplicar Pesquisa</span>
                         </button>
+                        )}
 
-                        {survey.status !== 'Arquivada' ? (
+                        {!podeEditar ? null : survey.status !== 'Arquivada' ? (
                           <button
                             onClick={() => {
                               setOpenMenuId(null);
@@ -430,6 +503,8 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                           </button>
                         )}
 
+                        {podeExcluir && (
+                        <>
                         <div className="h-px bg-slate-100 my-1" />
 
                         <button
@@ -444,6 +519,8 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                           <Trash2 className="w-3.5 h-3.5 text-rose-500" />
                           <span>Excluir</span>
                         </button>
+                        </>
+                        )}
                       </div>
                     )}
                   </div>

@@ -16,6 +16,7 @@ import {
   Inbox
 } from 'lucide-react';
 import { Survey, Respondent, AppUser } from '../types';
+import { podeCriarPesquisa } from '../services/permissoes';
 
 interface GeneralDashboardProps {
   surveys: Survey[];
@@ -44,6 +45,7 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
   onRefreshData,
   currentUser
 }) => {
+  const podeCriar = podeCriarPesquisa(currentUser || null);
   const publishedSurveys = surveys.filter((s) => s.status === 'Publicada');
   const draftSurveys = surveys.filter((s) => s.status === 'Rascunho');
   const closedSurveys = surveys.filter((s) => s.status === 'Encerrada');
@@ -87,13 +89,15 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
             Crie questionários com links públicos anônimos, colete respostas com gravação instantânea e acesse painéis estatísticos com drill-down individual por resposta.
           </p>
           <div className="pt-2 flex flex-wrap items-center gap-3">
-            <button
-              onClick={onOpenNewSurvey}
-              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs md:text-sm flex items-center gap-2 shadow-lg shadow-blue-600/30 transition-transform active:scale-95"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Criar Nova Pesquisa</span>
-            </button>
+            {podeCriar && (
+              <button
+                onClick={onOpenNewSurvey}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs md:text-sm flex items-center gap-2 shadow-lg shadow-blue-600/30 transition-transform active:scale-95"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Criar Nova Pesquisa</span>
+              </button>
+            )}
             <button
               onClick={onOpenSettings}
               className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-slate-200 border border-white/20 font-medium text-xs md:text-sm flex items-center gap-2 transition-colors"
@@ -198,16 +202,18 @@ export const GeneralDashboard: React.FC<GeneralDashboardProps> = ({
               <div className="space-y-1 max-w-md mx-auto">
                 <h3 className="text-base font-bold text-slate-800">Nenhuma pesquisa cadastrada</h3>
                 <p className="text-xs text-slate-500 leading-relaxed">
-                  Crie sua primeira pesquisa para gerar o link público e começar a receber respostas reais na sua planilha.
+                  Crie sua primeira pesquisa para gerar o link público e começar a receber respostas reais.
                 </p>
               </div>
-              <button
-                onClick={onOpenNewSurvey}
-                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs inline-flex items-center gap-2 shadow-md shadow-blue-600/20"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Criar Minha Primeira Pesquisa</span>
-              </button>
+              {podeCriar && (
+                <button
+                  onClick={onOpenNewSurvey}
+                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs inline-flex items-center gap-2 shadow-md shadow-blue-600/20"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Criar Minha Primeira Pesquisa</span>
+                </button>
+              )}
             </div>
           ) : (
             <div className="space-y-3">

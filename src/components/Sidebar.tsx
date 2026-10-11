@@ -10,11 +10,12 @@ import {
   Users,
   LogOut,
   ShieldCheck,
-  User as UserIcon
+  User as UserIcon,
+  Building2
 } from 'lucide-react';
-import { Survey, AppUser } from '../types';
+import { Survey, AppUser, ROLE_LABELS } from '../types';
 
-export type NavTab = 'dashboard' | 'surveys' | 'builder' | 'analytics' | 'settings' | 'users';
+export type NavTab = 'dashboard' | 'surveys' | 'builder' | 'analytics' | 'settings' | 'users' | 'departments';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -27,6 +28,7 @@ interface SidebarProps {
   currentUser?: AppUser | null;
   onLogout?: () => void;
   logoUrl?: string;
+  podeCriar?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -39,7 +41,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCloseMobile,
   currentUser,
   onLogout,
-  logoUrl
+  logoUrl,
+  podeCriar = true
 }) => {
   const isAdmin = currentUser?.role === 'admin';
 
@@ -81,6 +84,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           {/* Quick Create Action */}
+          {podeCriar && (
           <div className="p-3">
             <button
               onClick={() => {
@@ -93,6 +97,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span>Nova Pesquisa</span>
             </button>
           </div>
+          )}
 
           {/* Navigation Links */}
           <nav className="px-3 py-2 space-y-1">
@@ -160,6 +165,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {isAdmin && (
               <button
                 onClick={() => {
+                  onTabChange('departments');
+                  onCloseMobile();
+                }}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-medium transition-colors ${
+                  activeTab === 'departments'
+                    ? 'bg-slate-800 text-white font-semibold border-l-2 border-blue-500'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Building2 className="w-4 h-4 text-sky-400" />
+                  <span>Departamentos</span>
+                </div>
+              </button>
+            )}
+
+            {isAdmin && (
+              <button
+                onClick={() => {
                   onTabChange('users');
                   onCloseMobile();
                 }}
@@ -221,7 +245,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-[11px] font-bold text-slate-200 truncate">{currentUser.nome}</div>
-                <div className="text-[10px] text-slate-400 truncate">{currentUser.email}</div>
+                <div className="text-[10px] text-slate-400 truncate">{ROLE_LABELS[currentUser.role] || currentUser.email}</div>
               </div>
               {onLogout && (
                 <button

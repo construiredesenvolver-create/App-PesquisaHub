@@ -10,6 +10,7 @@ interface NavbarProps {
   activeSurveyTitle?: string;
   gasConfig?: GoogleAppsScriptConfig;
   onOpenSettings?: () => void;
+  podeCriar?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -19,7 +20,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   isRefreshing,
   activeSurveyTitle,
   gasConfig,
-  onOpenSettings
+  onOpenSettings,
+  podeCriar = true
 }) => {
   return (
     <header className="h-16 bg-white border-b border-slate-200/80 px-4 md:px-6 flex items-center justify-between sticky top-0 z-30">
@@ -86,13 +88,15 @@ export const Navbar: React.FC<NavbarProps> = ({
         )}
 
         {/* Botão Criar Pesquisa */}
-        <button
-          onClick={onOpenNewSurvey}
-          className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-sm"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Criar Pesquisa</span>
-        </button>
+        {podeCriar && (
+          <button
+            onClick={onOpenNewSurvey}
+            className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors shadow-sm"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Criar Pesquisa</span>
+          </button>
+        )}
       </div>
     </header>
   );
