@@ -332,6 +332,30 @@ export function App() {
     refreshDataFromSheets();
   };
 
+  // Excluir a resposta de uma pessoa (feita por engano / duplicada)
+  const handleDeleteRespondent = async (resp: Respondent) => {
+    await ApiService.deleteRespondent(resp.survey_id, resp.id);
+    setRespondents((prev) => prev.filter((r) => r.id !== resp.id));
+    setAnswers((prev) => prev.filter((a) => a.respondent_id !== resp.id));
+    setSurveys((prev) =>
+      prev.map((s) =>
+        s.id === resp.survey_id && typeof s.total_respostas === 'number'
+          ? { ...s, total_respostas: Math.max(0, s.total_respostas - 1) }
+          : s
+      )
+    );
+    showToast(`Resposta de "${resp.nome}" excluída.`);
+  };
+
+  // Lista de pessoas esperadas (aba Adesão)
+  const handleSalvarPublicoEsperado = async (surveyId: string, lista: string[]) => {
+    await ApiService.updateSurveyConfiguracoes(surveyId, { publico_esperado: lista });
+    setSurveys((prev) =>
+      prev.map((s) => (s.id === surveyId ? { ...s, configuracoes: { ...s.configuracoes, publico_esperado: lista } } : s))
+    );
+    showToast('Lista de pessoas esperadas salva.');
+  };
+
   // Filtro de departamentos do painel (salvo como preferência pessoal)
   const handleFiltroDepartamentos = (ids: string[]) => {
     setFiltroDepartamentos(ids);
@@ -654,6 +678,9 @@ export function App() {
                   onExportCSV={handleExportCSV}
                   somenteLeitura={!podeEditarPesquisa(currentUser, activeSurvey)}
                   podeExportar={podeExportarPesquisa(currentUser, activeSurvey, ApiService.podeExportarComoEspecial())}
+                  podeExcluirRespostas={podeExcluirPesquisa(currentUser, activeSurvey)}
+                  onDeleteRespondent={handleDeleteRespondent}
+                  onSalvarPublicoEsperado={(lista) => handleSalvarPublicoEsperado(activeSurvey.id, lista)}
                 />
               )
             ) : (
