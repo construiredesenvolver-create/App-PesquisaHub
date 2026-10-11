@@ -1,0 +1,75 @@
+# Backup diário do banco do PesquisaHub (Supabase, plano gratuito).
+# Exporta todo o banco do app (pesquisas, respostas, usuários, departamentos,
+# auditoria) e guarda uma cópia CRIPTOGRAFADA com senha por 30 dias, na aba
+# Actions do GitHub. Sem a senha, o arquivo não pode ser aberto por ninguém.
+#
+# Precisa de 2 secrets no repositório (Settings > Secrets and variables > Actions):
+#   SUPABASE_DB_URL  -> conexão "Session pooler" do Supabase (com a senha do banco)
+#   BACKUP_SENHA     -> senha que você escolhe para criptografar os backups
+# Como restaurar: veja docs/BACKUP.md
+name: Backup diário do banco
+
+on:
+  schedule:
+    - cron: '30 6 * * *' # todo dia, 03:30 (horário de Brasília)
+  workflow_dispatch: {}   # permite rodar manualmente pela aba Actions
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SENHA: ${{ secrets.BACKUP_SENHA }}
+    steps:
+      - name: Conferir configuração
+        run: |
+          if [ -z "$DB_URL" ] || [ -z "$SENHA" ]; then
+            echo "::error::Cadastre os secrets SUPABASE_DB_URL e BACKUP_SENHA em Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Instalar o cliente do PostgreSQL
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common > /dev/null
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y > /dev/null
+          sudo apt-get install -y -qq postgresql-client-17 > /dev/null
+          pg_dump --version
+
+      - name: Exportar e criptografar
+        run: |
+          set -euo pipefail
+          DATA=$(TZ=America/Sao_Paulo date +%Y-%m-%d_%H%M)
+          echo "DATA=$DATA" >> "$GITHUB_ENV"
+          mkdir -p backup
+
+          # 1. Estrutura + dados do app (tabelas, regras de acesso, funções, gatilhos)
+          pg_dump "$DB_URL" --schema=public --no-owner --no-privileges -f backup/01_app_public.sql
+
+          # 2. Contas de login (para não precisar recriar usuários numa restauração)
+          pg_dump "$DB_URL" --data-only --no-owner --no-privileges \
+            --table=auth.users --table=auth.identities -f backup/02_contas_login.sql
+
+          # 3. Contagens para conferência depois de restaurar
+          psql "$DB_URL" -At -c "select 'pesquisas', count(*) from public.surveys
+            union all select 'perguntas', count(*) from public.questions
+            union all select 'opcoes', count(*) from public.options
+            union all select 'respondentes', count(*) from public.respondents
+            union all select 'respostas', count(*) from public.answers
+            union all select 'usuarios', count(*) from public.profiles
+            union all select 'departamentos', count(*) from public.departments" > backup/contagens.txt
+          cat backup/contagens.txt
+
+          tar czf - backup | gpg --batch --yes --pinentry-mode loopback --passphrase "$SENHA" \
+            --symmetric --cipher-algo AES256 -o "pesquisahub-backup-$DATA.tar.gz.gpg"
+          rm -rf backup
+          ls -lh pesquisahub-backup-*.gpg
+
+      - name: Guardar o backup (30 dias)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pesquisahub-backup-${{ env.DATA }}
+          path: pesquisahub-backup-*.tar.gz.gpg
+          retention-days: 30
+          if-no-files-found: error
