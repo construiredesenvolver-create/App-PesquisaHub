@@ -22,7 +22,9 @@ import {
   Eye,
   KeyRound,
   Lock,
-  Building2
+  Building2,
+  BookmarkPlus,
+  Repeat
 } from 'lucide-react';
 import { Survey, SurveyStatus, Respondent, Question } from '../types';
 
@@ -59,6 +61,8 @@ interface SurveyListProps {
   permissoes?: SurveyListPermissions;
   onManageAccess?: (survey: Survey) => void;
   mostrarDepartamento?: boolean;
+  onSaveAsTemplate?: (survey: Survey) => void;
+  onReapply?: (survey: Survey) => void;
 }
 
 export const SurveyList: React.FC<SurveyListProps> = ({
@@ -78,7 +82,9 @@ export const SurveyList: React.FC<SurveyListProps> = ({
   onOpenNewSurvey,
   permissoes = PERMISSOES_PADRAO,
   onManageAccess,
-  mostrarDepartamento = false
+  mostrarDepartamento = false,
+  onSaveAsTemplate,
+  onReapply
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('Todos');
@@ -488,6 +494,34 @@ export const SurveyList: React.FC<SurveyListProps> = ({
                           <Copy className="w-3.5 h-3.5 text-slate-500" />
                           <span>Duplicar Pesquisa</span>
                         </button>
+                        )}
+
+                        {podeEditar && onReapply && (
+                          <button
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              if (window.confirm(`Criar uma nova aplicação de "${survey.titulo}"?\n\nSerá uma cópia em Rascunho, com as mesmas perguntas e a mesma lista de Adesão, ligada a esta pesquisa para comparar a evolução (aba Evolução).`)) {
+                                onReapply(survey);
+                              }
+                            }}
+                            className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                          >
+                            <Repeat className="w-3.5 h-3.5 text-indigo-500" />
+                            <span>Reaplicar pesquisa</span>
+                          </button>
+                        )}
+
+                        {permissoes.podeCriar && onSaveAsTemplate && (
+                          <button
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              onSaveAsTemplate(survey);
+                            }}
+                            className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2"
+                          >
+                            <BookmarkPlus className="w-3.5 h-3.5 text-blue-500" />
+                            <span>Salvar como modelo</span>
+                          </button>
                         )}
 
                         {!podeEditar ? null : survey.status !== 'Arquivada' ? (

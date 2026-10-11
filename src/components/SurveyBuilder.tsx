@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { Survey, Question, Option, QuestionType, Department, SurveyVisibility, QuestionDraftPayload } from '../types';
 import { generateId } from '../services/api';
+import { ConteudoModelo } from '../services/modelos';
 
 interface QuestionDraft {
   id: string;
@@ -46,6 +47,8 @@ interface SurveyBuilderProps {
   onCancel: () => void;
   // Departamentos onde a pessoa pode criar/mover pesquisas
   departamentosDisponiveis?: Department[];
+  // Modelo escolhido ao criar uma nova pesquisa (preenche título, configurações e perguntas)
+  modelo?: ConteudoModelo | null;
 }
 
 export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
@@ -55,19 +58,22 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
   isSaving = false,
   onSaveSurvey,
   onCancel,
-  departamentosDisponiveis = []
+  departamentosDisponiveis = [],
+  modelo = null
 }) => {
-  const [titulo, setTitulo] = useState(initialSurvey?.titulo || '');
-  const [descricao, setDescricao] = useState(initialSurvey?.descricao || '');
-  const [categoria, setCategoria] = useState(initialSurvey?.configuracoes?.categoria || 'Geral');
-  const [exigirNome, setExigirNome] = useState(initialSurvey?.configuracoes?.exigir_nome !== false);
-  const [umaRespostaPorPessoa, setUmaRespostaPorPessoa] = useState(!!initialSurvey?.configuracoes?.uma_resposta_por_pessoa);
-  const [restringirALista, setRestringirALista] = useState(!!initialSurvey?.configuracoes?.restringir_a_lista);
+  // Configurações de partida: da pesquisa em edição ou, ao criar, do modelo escolhido
+  const cfgInicial: any = initialSurvey?.configuracoes || modelo?.configuracoes || {};
+  const [titulo, setTitulo] = useState(initialSurvey?.titulo || modelo?.titulo || '');
+  const [descricao, setDescricao] = useState(initialSurvey?.descricao || modelo?.descricao || '');
+  const [categoria, setCategoria] = useState(cfgInicial.categoria || 'Geral');
+  const [exigirNome, setExigirNome] = useState(cfgInicial.exigir_nome !== false);
+  const [umaRespostaPorPessoa, setUmaRespostaPorPessoa] = useState(!!cfgInicial.uma_resposta_por_pessoa);
+  const [restringirALista, setRestringirALista] = useState(!!cfgInicial.restringir_a_lista);
   const [dataFim, setDataFim] = useState<string>(initialSurvey?.data_fim || '');
   const hojeLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0];
   const temListaAdesao = (initialSurvey?.configuracoes?.publico_esperado || []).length > 0;
   const [mensagemConclusao, setMensagemConclusao] = useState(
-    initialSurvey?.configuracoes?.mensagem_conclusao || 'Obrigado por enviar suas respostas!'
+    cfgInicial.mensagem_conclusao || 'Obrigado por enviar suas respostas!'
   );
   const [activeTab, setActiveTab] = useState<'editor' | 'preview'>('editor');
   const [departmentId, setDepartmentId] = useState<string>(
@@ -105,6 +111,17 @@ export const SurveyBuilder: React.FC<SurveyBuilderProps> = ({
           }))
         };
       });
+    }
+
+    if (!initialSurvey && modelo && modelo.perguntas.length > 0) {
+      return modelo.perguntas.map((p) => ({
+        id: generateId('temp_q'),
+        titulo: p.titulo,
+        descricao: p.descricao || '',
+        tipo: p.tipo,
+        obrigatoria: p.obrigatoria,
+        options: p.opcoes.map((texto) => ({ id: generateId('temp_opt'), texto, valor: texto }))
+      }));
     }
 
     // Perguntas padrão para iniciar
