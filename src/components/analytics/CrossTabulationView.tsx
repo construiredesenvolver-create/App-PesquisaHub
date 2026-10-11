@@ -316,9 +316,10 @@ export const CrossTabulationView: React.FC<CrossTabulationViewProps> = ({
                   fill={CHART_COLORS[idx % CHART_COLORS.length]}
                   radius={[4, 4, 0, 0]}
                   cursor="pointer"
-                  onClick={(data) => {
-                    if (data && data.group) {
-                      handleCellClick(data.group, col);
+                  onClick={(data: any) => {
+                    const grupo = data?.group ?? data?.payload?.group;
+                    if (grupo) {
+                      handleCellClick(grupo, col);
                     }
                   }}
                 />
