@@ -129,6 +129,18 @@ function base64ParaBlob(base64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType || 'image/jpeg' });
 }
 
+/** Um registro da auditoria (quem fez o quê e quando). */
+export interface AuditEntry {
+  id: number;
+  quando: string;
+  usuario_id: string | null;
+  usuario_email: string;
+  acao: 'insert' | 'update' | 'delete' | string;
+  entidade: string;
+  entidade_id: string;
+  detalhes: Record<string, any>;
+}
+
 export class ApiService {
   private static isInitialized = false;
 
@@ -610,6 +622,8 @@ export class ApiService {
     const survey = this.surveys.find((s) => s.id === surveyId);
 
     if (newStatus === 'Publicada' && !survey?.data_inicio) mudancas.data_inicio = hoje;
+    // Reabrir uma pesquisa cuja data de término já passou: limpa a data, senão ela fecharia de novo na hora
+    if (newStatus === 'Publicada' && survey?.data_fim && survey.data_fim < hoje) mudancas.data_fim = null;
     if (newStatus === 'Encerrada') mudancas.data_fim = hoje;
 
     const { data: alteradas, error } = await supabase.from('surveys').update(mudancas).eq('id', surveyId).select('id');
@@ -621,7 +635,7 @@ export class ApiService {
     if (survey) {
       survey.status = newStatus;
       if (mudancas.data_inicio) survey.data_inicio = mudancas.data_inicio;
-      if (mudancas.data_fim) survey.data_fim = mudancas.data_fim;
+      if ('data_fim' in mudancas) survey.data_fim = mudancas.data_fim || undefined;
     }
     return true;
   }
@@ -709,7 +723,8 @@ export class ApiService {
         status: surveyData.status,
         configuracoes: surveyData.configuracoes || {},
         department_id: surveyData.department_id || '',
-        visibilidade: surveyData.visibilidade || ''
+        visibilidade: surveyData.visibilidade || '',
+        data_fim: surveyData.data_fim || ''
       },
       p_perguntas: perguntas
     });
@@ -752,6 +767,23 @@ export class ApiService {
 
     const survey = this.surveys.find((s) => s.id === surveyId);
     if (survey) survey.configuracoes = { ...survey.configuracoes, ...parcial };
+  }
+
+  // ==========================================
+  // AUDITORIA (somente Administrador)
+  // ==========================================
+
+  public static async listAuditLog(inicio: number, quantidade: number, entidade?: string): Promise<AuditEntry[]> {
+    let consulta = supabase
+      .from('audit_log')
+      .select('*')
+      .order('quando', { ascending: false })
+      .order('id', { ascending: false })
+      .range(inicio, inicio + quantidade - 1);
+    if (entidade) consulta = consulta.eq('entidade', entidade);
+    const { data, error } = await consulta;
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível carregar a auditoria.'));
+    return (data || []) as AuditEntry[];
   }
 
   // ==========================================
