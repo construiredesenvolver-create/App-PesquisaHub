@@ -209,3 +209,29 @@ export function calcularAdesao(esperados: string[], respondents: Respondent[]): 
     percentual: lista.length ? Math.round((responderam.length / lista.length) * 100) : 0
   };
 }
+
+// ------------------------------------------------------------------------
+// CORES DOS NÍVEIS (usadas na tela e no PDF da Matriz de Competências)
+// ------------------------------------------------------------------------
+
+/** Cores por nível (do menor para o maior). Para 4 níveis seguem as cores da Autoavaliação. */
+export function paletaNiveis(n: number): { fundo: string; texto: string }[] {
+  const quatro = [
+    { fundo: '#fecaca', texto: '#991b1b' },
+    { fundo: '#bfdbfe', texto: '#1e40af' },
+    { fundo: '#bbf7d0', texto: '#166534' },
+    { fundo: '#e9d5ff', texto: '#6b21a8' }
+  ];
+  if (n === 4) return quatro;
+  const base = [
+    { fundo: '#fecaca', texto: '#991b1b' },
+    { fundo: '#fed7aa', texto: '#9a3412' },
+    { fundo: '#fde68a', texto: '#854d0e' },
+    { fundo: '#bfdbfe', texto: '#1e40af' },
+    { fundo: '#bbf7d0', texto: '#166534' },
+    { fundo: '#a7f3d0', texto: '#065f46' },
+    { fundo: '#e9d5ff', texto: '#6b21a8' }
+  ];
+  if (n <= 1) return [base[4]];
+  return Array.from({ length: n }, (_, i) => base[Math.round((i * (base.length - 1)) / (n - 1))]);
+}
