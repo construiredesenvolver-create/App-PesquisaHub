@@ -44,6 +44,9 @@ interface AnalyticsViewProps {
   onShareSurvey: (survey: Survey) => void;
   onOpenPublicView: (surveyId: string) => void;
   onExportCSV: (surveyId: string) => void;
+  // Acesso especial: só visualiza (sem compartilhar) e exporta apenas se liberado
+  somenteLeitura?: boolean;
+  podeExportar?: boolean;
 }
 
 export type AnalyticsTab = 'questions' | 'crosstab' | 'respondents' | 'sentiment' | 'report';
@@ -57,7 +60,9 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   onBackToSurveys,
   onShareSurvey,
   onOpenPublicView,
-  onExportCSV
+  onExportCSV,
+  somenteLeitura = false,
+  podeExportar = true
 }) => {
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('questions');
   const [showFilters, setShowFilters] = useState(false);
@@ -194,13 +199,15 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
         {/* Header Action Buttons */}
         <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
-          <button
-            onClick={() => onShareSurvey(survey)}
-            className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
-          >
-            <Share2 className="w-3.5 h-3.5" />
-            <span>Compartilhar</span>
-          </button>
+          {!somenteLeitura && (
+            <button
+              onClick={() => onShareSurvey(survey)}
+              className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 shadow-xs transition-colors"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>Compartilhar</span>
+            </button>
+          )}
 
           {survey.status === 'Publicada' && (
             <button
@@ -319,6 +326,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <span>Sentimento & IA</span>
           </button>
 
+          {podeExportar && (
           <button
             onClick={() => setActiveTab('report')}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
@@ -330,6 +338,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <FileText className="w-4 h-4" />
             <span>Relatório & Exportação</span>
           </button>
+          )}
         </div>
 
         {/* Filter Toggle Button */}
@@ -495,7 +504,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         <SentimentAnalysisView analyticsData={analyticsData} />
       )}
 
-      {activeTab === 'report' && (
+      {activeTab === 'report' && podeExportar && (
         <ExportReportView
           analyticsData={analyticsData}
           onExportCSV={() => onExportCSV(survey.id)}
