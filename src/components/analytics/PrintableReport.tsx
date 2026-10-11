@@ -16,7 +16,7 @@ import {
 } from 'recharts';
 import { SurveyAnalyticsData, Question } from '../../types';
 import { AnalyticsEngine, CHART_COLORS } from '../../services/analyticsEngine';
-import { QuestionChartType } from './QuestionAnalyticsCard';
+import { QuestionChartType, RotulosRosca } from './QuestionAnalyticsCard';
 import { detectarEscala, montarMatriz, rotuloCurtoNivel, paletaNiveis } from '../../services/analiseAvancada';
 
 export type ReportMode = 'simples' | 'completo' | 'personalizado';
@@ -305,7 +305,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
                   </div>
                 ) : chartType === 'donut' ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
-                    <div style={{ width: 260, height: 220 }}>
+                    <div style={{ width: 260, height: 220, position: 'relative' }}>
                       <ResponsiveContainer width={260} height={220}>
                         <PieChart>
                           <Pie data={chartData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="count" isAnimationActive={false}>
@@ -315,6 +315,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
                           </Pie>
                         </PieChart>
                       </ResponsiveContainer>
+                      <RotulosRosca dados={chartData} raio={65} />
                     </div>
                     <div style={{ flex: 1 }}>
                       {chartData.map((item) => (

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -17,6 +17,7 @@ import {
   DrillDownTarget
 } from '../../types';
 import { CHART_COLORS } from '../../services/analyticsEngine';
+import { PALETA_CORES, chaveCor } from '../../services/analiseAvancada';
 import { 
   BarChart3, 
   PieChart as PieIcon, 
@@ -29,10 +30,56 @@ import {
   Frown,
   Users,
   Layers,
-  ChevronRight
+  ChevronRight,
+  Palette,
+  X,
+  Loader2
 } from 'lucide-react';
 
 export type QuestionChartType = 'horizontal_bar' | 'donut' | 'ranking';
+
+/**
+ * Percentuais escritos por cima de cada fatia da rosca (fatias abaixo de 5% ficam só na legenda).
+ * Desenhado como uma camada por cima do gráfico, o que funciona igual na tela e no PDF.
+ * Segue a geometria padrão do gráfico de rosca: começa às 3 horas e gira no sentido anti-horário.
+ */
+export const RotulosRosca: React.FC<{ dados: Array<{ count: number; percentage: number }>; raio: number }> = ({ dados, raio }) => {
+  const total = dados.reduce((s, d) => s + (d.count || 0), 0);
+  if (!total) return null;
+  let acumulado = 0;
+  return (
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+      {dados.map((d, i) => {
+        const inicio = acumulado;
+        acumulado += d.count || 0;
+        const pct = Number(d.percentage) || 0;
+        if (!d.count || pct < 5) return null;
+        const meio = ((inicio + (d.count || 0) / 2) / total) * 2 * Math.PI;
+        const x = raio * Math.cos(meio);
+        const y = raio * Math.sin(meio);
+        return (
+          <span
+            key={i}
+            style={{
+              position: 'absolute',
+              left: `calc(50% + ${x.toFixed(1)}px)`,
+              top: `calc(50% - ${y.toFixed(1)}px)`,
+              transform: 'translate(-50%, -50%)',
+              color: '#ffffff',
+              fontSize: 11,
+              fontWeight: 800,
+              lineHeight: 1,
+              textShadow: '0 1px 2px rgba(15,23,42,0.55)',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {String(pct).replace('.', ',')}%
+          </span>
+        );
+      })}
+    </div>
+  );
+};
 
 interface QuestionAnalyticsCardProps {
   analytics: QuestionAnalytics;
@@ -41,6 +88,9 @@ interface QuestionAnalyticsCardProps {
   onDrillDown: (target: DrillDownTarget) => void;
   chartType: QuestionChartType;
   onChartTypeChange: (questionId: string, chartType: QuestionChartType) => void;
+  // Escolher as cores das alternativas (quem pode editar a pesquisa)
+  podeEditarCores?: boolean;
+  onSalvarCores?: (mudancas: Record<string, string>) => Promise<void>;
 }
 
 export const QuestionAnalyticsCard: React.FC<QuestionAnalyticsCardProps> = ({
@@ -49,8 +99,41 @@ export const QuestionAnalyticsCard: React.FC<QuestionAnalyticsCardProps> = ({
   surveyTitle,
   onDrillDown,
   chartType,
-  onChartTypeChange
+  onChartTypeChange,
+  podeEditarCores = false,
+  onSalvarCores
 }) => {
+  const [editandoCores, setEditandoCores] = useState(false);
+  const [rascunhoCores, setRascunhoCores] = useState<Record<string, string>>({});
+  const [salvandoCores, setSalvandoCores] = useState(false);
+  const [erroCores, setErroCores] = useState<string | null>(null);
+
+  const abrirCores = () => {
+    const atual: Record<string, string> = {};
+    analytics.distribution.forEach((d) => { atual[d.optionText] = d.color || '#2563eb'; });
+    setRascunhoCores(atual);
+    setErroCores(null);
+    setEditandoCores(true);
+  };
+
+  const salvarCores = async (restaurar = false) => {
+    if (!onSalvarCores) return;
+    setSalvandoCores(true);
+    setErroCores(null);
+    try {
+      const mudancas: Record<string, string> = {};
+      analytics.distribution.forEach((d) => {
+        mudancas[chaveCor(d.optionText)] = restaurar ? '' : (rascunhoCores[d.optionText] || '');
+      });
+      await onSalvarCores(mudancas);
+      setEditandoCores(false);
+    } catch (err: any) {
+      setErroCores(err.message || 'Não foi possível salvar as cores.');
+    } finally {
+      setSalvandoCores(false);
+    }
+  };
+
   const setChartType = (type: QuestionChartType) => onChartTypeChange(analytics.questionId, type);
 
   const {
@@ -154,7 +237,18 @@ export const QuestionAnalyticsCard: React.FC<QuestionAnalyticsCardProps> = ({
         </div>
 
         {/* Chart View Toggle Controls */}
-        <div className="flex items-center gap-1.5 self-start bg-slate-100 p-1 rounded-xl">
+        <div className="flex items-center gap-2 self-start">
+        {podeEditarCores && onSalvarCores && distribution.length > 0 && (
+          <button
+            onClick={abrirCores}
+            title="Escolher as cores das alternativas"
+            className="p-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs font-semibold flex items-center gap-1"
+          >
+            <Palette className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Cores</span>
+          </button>
+        )}
+        <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
           <button
             onClick={() => setChartType('horizontal_bar')}
             title="Gráfico de Barras"
@@ -194,7 +288,77 @@ export const QuestionAnalyticsCard: React.FC<QuestionAnalyticsCardProps> = ({
             <span className="hidden sm:inline">Ranking</span>
           </button>
         </div>
+        </div>
       </div>
+
+      {/* Editor de cores das alternativas */}
+      {editandoCores && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5"><Palette className="w-4 h-4 text-blue-600" /> Cores das alternativas</h4>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                A cor vale para todas as perguntas desta pesquisa que tenham a mesma alternativa — ex.: escolher a cor de
+                "Aplicado" aqui muda nas 27 capacidades de uma vez. Também aparece no PDF.
+              </p>
+            </div>
+            <button onClick={() => setEditandoCores(false)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-200" aria-label="Fechar">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {erroCores && <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl px-3 py-2">{erroCores}</div>}
+          <div className="space-y-2.5">
+            {distribution.map((item) => {
+              const cor = rascunhoCores[item.optionText] || item.color || '#2563eb';
+              return (
+                <div key={item.optionId} className="flex flex-col lg:flex-row lg:items-center gap-2">
+                  <div className="flex items-center gap-2 min-w-0 lg:w-80">
+                    <span className="w-4 h-4 rounded-full shrink-0 border border-white shadow" style={{ backgroundColor: cor }} />
+                    <span className="text-xs font-medium text-slate-700 truncate" title={item.optionText}>{item.optionText}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {PALETA_CORES.map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => setRascunhoCores((prev) => ({ ...prev, [item.optionText]: c }))}
+                        title={c}
+                        className={`w-5 h-5 rounded-full border-2 transition-transform hover:scale-110 ${cor.toLowerCase() === c ? 'border-slate-900' : 'border-white shadow-xs'}`}
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
+                    <label className="w-5 h-5 rounded-full border border-dashed border-slate-400 overflow-hidden cursor-pointer relative" title="Outra cor">
+                      <input
+                        type="color"
+                        value={cor}
+                        onChange={(e) => setRascunhoCores((prev) => ({ ...prev, [item.optionText]: e.target.value }))}
+                        className="absolute inset-0 opacity-0 cursor-pointer"
+                      />
+                      <span className="absolute inset-0 flex items-center justify-center text-[10px] text-slate-500">+</span>
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <button
+              onClick={() => salvarCores(false)}
+              disabled={salvandoCores}
+              className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center gap-1.5 disabled:opacity-60"
+            >
+              {salvandoCores && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Salvar cores
+            </button>
+            <button
+              onClick={() => salvarCores(true)}
+              disabled={salvandoCores}
+              className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+              title="Volta às cores automáticas (pelos emojis do texto ou pela paleta padrão)"
+            >
+              Restaurar automáticas
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* KPI Cards Strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -368,7 +532,7 @@ export const QuestionAnalyticsCard: React.FC<QuestionAnalyticsCardProps> = ({
           </div>
         ) : chartType === 'donut' ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
-            <div className="h-64 w-full">
+            <div className="h-64 w-full relative">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -401,6 +565,7 @@ export const QuestionAnalyticsCard: React.FC<QuestionAnalyticsCardProps> = ({
                   />
                 </PieChart>
               </ResponsiveContainer>
+              <RotulosRosca dados={chartData} raio={70} />
             </div>
 
             {/* Legenda Lateral Interativa */}

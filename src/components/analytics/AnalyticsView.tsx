@@ -61,6 +61,8 @@ interface AnalyticsViewProps {
   onDeleteRespondent?: (respondent: Respondent) => Promise<void>;
   // Lista de pessoas esperadas (aba Adesão)
   onSalvarPublicoEsperado?: (lista: string[]) => Promise<void>;
+  // Cores escolhidas para as alternativas nos gráficos
+  onSalvarCores?: (mudancas: Record<string, string>) => Promise<void>;
 }
 
 export type AnalyticsTab = 'questions' | 'crosstab' | 'respondents' | 'competencias' | 'evolucao' | 'adesao' | 'sentiment' | 'report';
@@ -79,7 +81,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   podeExportar = true,
   podeExcluirRespostas = false,
   onDeleteRespondent,
-  onSalvarPublicoEsperado
+  onSalvarPublicoEsperado,
+  onSalvarCores
 }) => {
   const [activeTab, setActiveTab] = useState<AnalyticsTab>('questions');
   const [showFilters, setShowFilters] = useState(false);
@@ -538,6 +541,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               onDrillDown={handleOpenDrillDown}
               chartType={getChartTypeForQuestion(qa.questionId, qa.recommendedChart)}
               onChartTypeChange={handleChartTypeChange}
+              podeEditarCores={!somenteLeitura && !!onSalvarCores}
+              onSalvarCores={onSalvarCores}
             />
           ))}
         </div>
