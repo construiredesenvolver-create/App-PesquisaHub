@@ -18,6 +18,8 @@ export interface SurveySettings {
   categoria?: string;
   contexto_ia?: string;
   publico_esperado?: string[]; // nomes de quem deve responder (aba Adesão)
+  uma_resposta_por_pessoa?: boolean; // bloqueia uma segunda resposta com o mesmo nome
+  restringir_a_lista?: boolean; // só aceita nomes da lista de Adesão
 }
 
 export interface Survey {
