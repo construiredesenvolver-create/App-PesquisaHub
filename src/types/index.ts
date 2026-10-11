@@ -36,7 +36,40 @@ export interface Survey {
   // compatibilidade com respostas de versões antigas do Apps Script.
   total_perguntas?: number;
   total_respostas?: number;
+  // Departamento dono da pesquisa e quem pode ver os resultados
+  department_id?: string;
+  department_nome?: string;
+  visibilidade?: SurveyVisibility;
 }
+
+// 'departamento' = Gestores e Líderes do departamento veem os resultados
+// 'restrita'     = só Administradores e Gestores do departamento veem
+export type SurveyVisibility = 'departamento' | 'restrita';
+
+export interface Department {
+  id: string;
+  nome: string;
+  descricao: string;
+  ativo: boolean;
+  criado_em?: string;
+}
+
+// Liberação de uma pesquisa específica para uma pessoa (Colaborador com acesso especial)
+export interface SurveyAccessGrant {
+  survey_id: string;
+  user_id: string;
+  pode_exportar: boolean;
+  criado_em?: string;
+  usuario_nome?: string;
+  usuario_email?: string;
+}
+
+// Formato das perguntas/alternativas que o construtor envia ao salvar.
+// `id` vem preenchido quando a pergunta/alternativa já existe (edição).
+export type QuestionDraftPayload = Array<{
+  question: Omit<Question, 'id' | 'survey_id'> & { id?: string };
+  options: Array<Omit<Option, 'id' | 'question_id'> & { id?: string }>;
+}>;
 
 export interface Question {
   id: string;
@@ -183,7 +216,18 @@ export interface GoogleAppsScriptConfig {
   autoSync: boolean;
 }
 
-export type UserRole = 'admin' | 'user';
+// admin    = Administrador (tudo)
+// gestor   = Gestor de Departamento
+// lider    = Líder de Departamento
+// especial = Colaborador com acesso especial (só as pesquisas liberadas, somente leitura)
+export type UserRole = 'admin' | 'gestor' | 'lider' | 'especial';
+
+export const ROLE_LABELS: Record<UserRole, string> = {
+  admin: 'Administrador',
+  gestor: 'Gestor de Departamento',
+  lider: 'Líder de Departamento',
+  especial: 'Acesso especial'
+};
 
 export interface AppUser {
   id: string;
@@ -195,6 +239,8 @@ export interface AppUser {
   criado_em?: string;
   ultimo_login?: string;
   pedido_reset_em?: string; // usuário clicou em "Esqueci minha senha" e aguarda o ADM
+  departamentos?: string[]; // IDs dos departamentos aos quais a pessoa tem acesso
+  preferencias?: { departamentos_visiveis?: string[] };
 }
 
 export interface AuthSession {
