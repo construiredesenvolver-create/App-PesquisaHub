@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { X, FileText, FileStack, SlidersHorizontal, Loader2, Download, ChevronDown, ChevronUp } from 'lucide-react';
 import { SurveyAnalyticsData } from '../../types';
 import { PrintableReport, ReportMode, SecoesRelatorio, SECOES_SIMPLES, SECOES_COMPLETO } from './PrintableReport';
 import { exportPrintableReportToPdf } from '../../services/pdfExportService';
 import { QuestionChartType } from './QuestionAnalyticsCard';
 import { detectarEscala } from '../../services/analiseAvancada';
+import { ApiService } from '../../services/api';
 
 interface PdfExportModalProps {
   isOpen: boolean;
@@ -47,6 +48,11 @@ export const PdfExportModal: React.FC<PdfExportModalProps> = ({
   const [perguntasSelecionadas, setPerguntasSelecionadas] = useState<string[]>(() => questionAnalytics.map((q) => q.questionId));
   const [mostrarPerguntas, setMostrarPerguntas] = useState(false);
 
+  const [resumoIA, setResumoIA] = useState<{ resumo: string; achados: string[]; plano: string[]; atualizadoEm: string } | null>(null);
+  useEffect(() => {
+    if (isOpen) ApiService.getResumoExecutivo(analyticsData.survey.id).then(setResumoIA).catch(() => setResumoIA(null));
+  }, [isOpen, analyticsData.survey.id]);
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [progressLabel, setProgressLabel] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +78,8 @@ export const PdfExportModal: React.FC<PdfExportModalProps> = ({
     setPerguntasSelecionadas((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
-  const nenhumaSecaoAlemDaCapa = !Object.values(secoes).some(Boolean);
+  const secoesEfetivas: SecoesRelatorio = { ...secoes, resumoIA: secoes.resumoIA && !!resumoIA };
+  const nenhumaSecaoAlemDaCapa = !Object.values(secoesEfetivas).some(Boolean);
   const perguntasSemSelecao = secoes.perguntas && perguntasSelecionadas.length === 0;
 
   const handleGenerate = async () => {
@@ -107,6 +114,7 @@ export const PdfExportModal: React.FC<PdfExportModalProps> = ({
   };
 
   const itens: Array<{ chave: keyof SecoesRelatorio; titulo: string; descricao: string; disponivel: boolean; motivo?: string }> = [
+    { chave: 'resumoIA', titulo: 'Resumo executivo (IA)', descricao: 'Leitura geral, achados e plano de ação gerados na aba Resumo & IA.', disponivel: !!resumoIA, motivo: 'gere o resumo na aba "Resumo & IA"' },
     { chave: 'conclusoes', titulo: 'Principais conclusões', descricao: 'Pontos de consenso, divisões e síntese numérica.', disponivel: true },
     { chave: 'evolucao', titulo: 'Evolução das respostas', descricao: 'Gráfico do volume de respostas ao longo dos dias.', disponivel: temEvolucao, motivo: 'precisa de respostas em mais de um dia' },
     { chave: 'resumo', titulo: 'Tabela-resumo por pergunta', descricao: 'Opção predominante, % e consenso de cada pergunta.', disponivel: true },
@@ -255,8 +263,9 @@ export const PdfExportModal: React.FC<PdfExportModalProps> = ({
       <PrintableReport
         containerId={PDF_CONTAINER_ID}
         analyticsData={analyticsData}
-        secoes={secoes}
+        secoes={secoesEfetivas}
         rotuloVersao={ROTULO_VERSAO[modo]}
+        resumoIA={resumoIA}
         perguntasSelecionadas={perguntasSelecionadas}
         getChartTypeForQuestion={getChartTypeForQuestion}
       />

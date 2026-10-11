@@ -23,6 +23,7 @@ export type ReportMode = 'simples' | 'completo' | 'personalizado';
 
 /** Seções que podem entrar no PDF (a capa sempre entra). */
 export interface SecoesRelatorio {
+  resumoIA: boolean;
   conclusoes: boolean;
   evolucao: boolean;
   resumo: boolean;
@@ -33,10 +34,10 @@ export interface SecoesRelatorio {
 }
 
 export const SECOES_SIMPLES: SecoesRelatorio = {
-  conclusoes: true, evolucao: true, resumo: true, perguntas: false, matriz: false, cruzamento: false, individuais: false
+  resumoIA: true, conclusoes: true, evolucao: true, resumo: true, perguntas: false, matriz: false, cruzamento: false, individuais: false
 };
 export const SECOES_COMPLETO: SecoesRelatorio = {
-  conclusoes: true, evolucao: true, resumo: true, perguntas: true, matriz: true, cruzamento: true, individuais: true
+  resumoIA: true, conclusoes: true, evolucao: true, resumo: true, perguntas: true, matriz: true, cruzamento: true, individuais: true
 };
 
 interface PrintableReportProps {
@@ -46,6 +47,8 @@ interface PrintableReportProps {
   rotuloVersao: string;
   // Perguntas que entram na "Análise por Pergunta" (vazio/ausente = todas)
   perguntasSelecionadas?: string[];
+  // Resumo executivo gerado por IA (se existir)
+  resumoIA?: { resumo: string; achados: string[]; plano: string[]; atualizadoEm: string } | null;
   getChartTypeForQuestion: (questionId: string, recommendedChart: string) => QuestionChartType;
 }
 
@@ -66,6 +69,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
   secoes,
   rotuloVersao,
   perguntasSelecionadas,
+  resumoIA,
   getChartTypeForQuestion
 }) => {
   const { survey, executiveSummary, questionAnalytics, questions, options, respondents, answers } = analyticsData;
@@ -135,6 +139,27 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
           Versão {rotuloVersao}
         </div>
       </div>
+
+      {/* Resumo executivo (IA) */}
+      {secoes.resumoIA && resumoIA && (
+        <div className="pdf-block" style={blockStyle}>
+          <SectionTitle>Resumo Executivo</SectionTitle>
+          <p style={{ fontSize: 12, color: '#334155', lineHeight: 1.55, marginTop: 8 }}>{resumoIA.resumo}</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
+            <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 14, padding: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: '#92400e', textTransform: 'uppercase', marginBottom: 6 }}>Principais achados</div>
+              {resumoIA.achados.map((a, i) => <p key={i} style={{ fontSize: 10.5, marginBottom: 5, lineHeight: 1.4 }}>• {a}</p>)}
+            </div>
+            <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 14, padding: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: '#065f46', textTransform: 'uppercase', marginBottom: 6 }}>Plano de ação sugerido</div>
+              {resumoIA.plano.map((a, i) => <p key={i} style={{ fontSize: 10.5, marginBottom: 5, lineHeight: 1.4 }}>{i + 1}. {a}</p>)}
+            </div>
+          </div>
+          <p style={{ fontSize: 9, color: '#94a3b8', marginTop: 8 }}>
+            Gerado com apoio de IA em {new Date(resumoIA.atualizadoEm).toLocaleDateString('pt-BR')} a partir dos resultados desta pesquisa.
+          </p>
+        </div>
+      )}
 
       {/* BLOCO 2 — Principais conclusões */}
       {secoes.conclusoes && (

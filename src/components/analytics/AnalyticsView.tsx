@@ -17,7 +17,8 @@ import {
   SlidersHorizontal,
   Download,
   Grid3x3,
-  UsersRound
+  UsersRound,
+  TrendingUp
 } from 'lucide-react';
 import { 
   Survey, 
@@ -35,6 +36,9 @@ import { IndividualResponsesTable } from './IndividualResponsesTable';
 import { ExportReportView } from './ExportReportView';
 import { CompetencyMatrixView } from './CompetencyMatrixView';
 import { AdesaoView } from './AdesaoView';
+import { EvolucaoView } from './EvolucaoView';
+import { ResumoExecutivoCard } from './ResumoExecutivoCard';
+import { ApiService } from '../../services/api';
 import { detectarEscala } from '../../services/analiseAvancada';
 import { DrillDownDrawer } from './DrillDownDrawer';
 import { DrillDownTarget } from '../../types';
@@ -59,7 +63,7 @@ interface AnalyticsViewProps {
   onSalvarPublicoEsperado?: (lista: string[]) => Promise<void>;
 }
 
-export type AnalyticsTab = 'questions' | 'crosstab' | 'respondents' | 'competencias' | 'adesao' | 'sentiment' | 'report';
+export type AnalyticsTab = 'questions' | 'crosstab' | 'respondents' | 'competencias' | 'evolucao' | 'adesao' | 'sentiment' | 'report';
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   survey,
@@ -179,6 +183,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
   // Escala comum entre várias perguntas (ex.: Autoavaliação 1–4) habilita a Matriz de Competências
   const escala = useMemo(() => detectarEscala(questions, options), [questions, options]);
+  // Outras aplicações da mesma pesquisa (reaplicações) habilitam a aba Evolução
+  const temSerie = ApiService.getSerie(survey).length >= 2;
   const publicoEsperado: string[] = Array.isArray((survey.configuracoes as any)?.publico_esperado)
     ? (survey.configuracoes as any).publico_esperado
     : [];
@@ -347,6 +353,20 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </button>
           )}
 
+          {temSerie && (
+            <button
+              onClick={() => setActiveTab('evolucao')}
+              className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
+                activeTab === 'evolucao'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <TrendingUp className="w-4 h-4" />
+              <span>Evolução</span>
+            </button>
+          )}
+
           <button
             onClick={() => setActiveTab('adesao')}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all whitespace-nowrap ${
@@ -368,7 +388,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             }`}
           >
             <Sparkles className="w-4 h-4" />
-            <span>Sentimento & IA</span>
+            <span>Resumo & IA</span>
           </button>
 
           {podeExportar && (
@@ -556,6 +576,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         />
       )}
 
+      {activeTab === 'evolucao' && temSerie && <EvolucaoView survey={survey} />}
+
       {activeTab === 'adesao' && (
         <AdesaoView
           respondents={respondents}
@@ -568,7 +590,10 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       )}
 
       {activeTab === 'sentiment' && (
-        <SentimentAnalysisView analyticsData={analyticsData} />
+        <div className="space-y-6">
+          <ResumoExecutivoCard analyticsData={analyticsData} podeGerar={!somenteLeitura} />
+          <SentimentAnalysisView analyticsData={analyticsData} />
+        </div>
       )}
 
       {activeTab === 'report' && podeExportar && (
