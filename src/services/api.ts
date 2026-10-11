@@ -15,6 +15,7 @@ import {
 import { SUPABASE_URL, GAS_STORAGE_KEY } from './config';
 import { AuthService } from './authService';
 import { supabase, mensagemDeErro, chamarFuncao } from './supabaseClient';
+import { ConteudoModelo, ModeloPesquisa } from './modelos';
 
 /**
  * =========================================================================
@@ -767,6 +768,139 @@ export class ApiService {
 
     const survey = this.surveys.find((s) => s.id === surveyId);
     if (survey) survey.configuracoes = { ...survey.configuracoes, ...parcial };
+  }
+
+  // ==========================================
+  // MODELOS DE PESQUISA (da organização)
+  // ==========================================
+
+  public static async listTemplates(): Promise<ModeloPesquisa[]> {
+    const { data, error } = await supabase.from('survey_templates').select('*').order('nome');
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível carregar os modelos.'));
+    return (data || []).map((t: any) => ({
+      id: String(t.id),
+      nome: String(t.nome || ''),
+      descricao: String(t.descricao || ''),
+      origem: 'organizacao' as const,
+      department_id: t.department_id ? String(t.department_id) : null,
+      department_nome: this.departments.find((d) => d.id === t.department_id)?.nome,
+      criado_por: t.criado_por ? String(t.criado_por) : null,
+      criado_em: t.criado_em || '',
+      conteudo: t.conteudo as ConteudoModelo
+    }));
+  }
+
+  /** Monta o conteúdo de um modelo a partir de uma pesquisa (precisa de fetchSurveyDetail antes). */
+  public static montarConteudoModelo(surveyId: string): ConteudoModelo | null {
+    const dados = this.getSurvey(surveyId);
+    if (!dados) return null;
+    const { publico_esperado, contexto_ia, serie_id, ...configuracoes } = (dados.survey.configuracoes || {}) as any;
+    return {
+      titulo: dados.survey.titulo,
+      descricao: dados.survey.descricao || '',
+      configuracoes,
+      perguntas: dados.questions.map((q) => ({
+        titulo: q.titulo,
+        descricao: q.descricao || '',
+        tipo: q.tipo,
+        obrigatoria: q.obrigatoria,
+        opcoes: dados.options.filter((o) => o.question_id === q.id).sort((a, b) => a.ordem - b.ordem).map((o) => o.texto)
+      }))
+    };
+  }
+
+  public static async saveTemplate(nome: string, descricao: string, departmentId: string | null, conteudo: ConteudoModelo): Promise<void> {
+    const usuario = AuthService.getCurrentUser();
+    const { error } = await supabase.from('survey_templates').insert({
+      nome: nome.trim(),
+      descricao: descricao.trim(),
+      department_id: departmentId || null,
+      conteudo,
+      criado_por: usuario?.id || null
+    });
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível salvar o modelo.'));
+  }
+
+  public static async deleteTemplate(id: string): Promise<void> {
+    const { data, error } = await supabase.from('survey_templates').delete().eq('id', id).select('id');
+    if (error) throw new Error(mensagemDeErro(error, 'Não foi possível remover o modelo.'));
+    if (!data || data.length === 0) throw new Error('Você só pode remover modelos criados por você.');
+  }
+
+  // ==========================================
+  // REAPLICAÇÃO (evolução entre aplicações)
+  // ==========================================
+
+  /** Pesquisas da mesma série (a original e suas reaplicações), da mais antiga para a mais recente. */
+  public static getSerie(survey: Survey): Survey[] {
+    const serie = (survey.configuracoes as any)?.serie_id || survey.id;
+    return this.surveys
+      .filter((s) => s.id === serie || (s.configuracoes as any)?.serie_id === serie)
+      .sort((a, b) => (a.data_inicio || a.data_criacao || '').localeCompare(b.data_inicio || b.data_criacao || ''));
+  }
+
+  /**
+   * Cria uma nova aplicação da pesquisa (cópia em Rascunho, mesmas perguntas, mesma
+   * lista de Adesão) ligada à original, para comparar a evolução depois.
+   * Requer fetchSurveyDetail antes.
+   */
+  public static async reapplySurvey(surveyId: string): Promise<Survey | null> {
+    const original = this.getSurvey(surveyId);
+    if (!original) return null;
+    const serieId = (original.survey.configuracoes as any)?.serie_id || original.survey.id;
+
+    // A original também passa a "pertencer" à série
+    if (!(original.survey.configuracoes as any)?.serie_id) {
+      await this.updateSurveyConfiguracoes(original.survey.id, { serie_id: serieId });
+    }
+
+    const hoje = new Date();
+    const rotulo = `${String(hoje.getMonth() + 1).padStart(2, '0')}/${hoje.getFullYear()}`;
+    const tituloBase = original.survey.titulo.replace(/\s*\(aplicação \d{2}\/\d{4}\)$/i, '');
+
+    return this.createSurvey(
+      {
+        titulo: `${tituloBase} (aplicação ${rotulo})`,
+        descricao: original.survey.descricao,
+        status: 'Rascunho',
+        link_publico: `${original.survey.link_publico}-${Date.now().toString(36)}`,
+        configuracoes: { ...original.survey.configuracoes, serie_id: serieId } as any,
+        department_id: original.survey.department_id,
+        visibilidade: original.survey.visibilidade
+      },
+      original.questions.map((q) => ({
+        question: { ordem: q.ordem, titulo: q.titulo, descricao: q.descricao, tipo: q.tipo, obrigatoria: q.obrigatoria, ativa: true },
+        options: original.options
+          .filter((o) => o.question_id === q.id)
+          .map((o) => ({ ordem: o.ordem, texto: o.texto, valor: o.valor, peso: o.peso }))
+      }))
+    );
+  }
+
+  // ==========================================
+  // RESUMO EXECUTIVO POR IA
+  // ==========================================
+
+  public static async getResumoExecutivo(surveyId: string): Promise<{ resumo: string; achados: string[]; plano: string[]; atualizadoEm: string; respostas: number } | null> {
+    const { data, error } = await supabase
+      .from('ai_analysis')
+      .select('*')
+      .eq('survey_id', surveyId)
+      .eq('question_id', '__resumo__')
+      .maybeSingle();
+    if (error || !data) return null;
+    return {
+      resumo: data.resumo || '',
+      achados: Array.isArray(data.pontos_positivos) ? data.pontos_positivos : [],
+      plano: Array.isArray(data.pontos_negativos) ? data.pontos_negativos : [],
+      atualizadoEm: data.atualizado_em || '',
+      respostas: Number(data.respostas_count) || 0
+    };
+  }
+
+  public static async gerarResumoExecutivo(surveyId: string, dados: Record<string, any>): Promise<{ resumo: string; achados: string[]; plano: string[]; atualizadoEm: string; respostas: number }> {
+    const r = await chamarFuncao<{ data: any }>('analisar-sentimento', { tipo: 'resumo', surveyId, dados });
+    return r.data;
   }
 
   // ==========================================
