@@ -12,6 +12,7 @@ import {
   SurveyFilter,
   SatisfactionIndex
 } from '../types';
+import { corDaAlternativa } from './analiseAvancada';
 
 // Paleta harmoniosa e de alto contraste para gráficos
 export const CHART_COLORS = [
@@ -61,7 +62,7 @@ export class AnalyticsEngine {
       
       const qAnswers = activeAnswers.filter((ans) => ans.question_id === q.id);
       
-      return this.analyzeQuestion(q, qOptions, activeRespondents, qAnswers);
+      return this.analyzeQuestion(q, qOptions, activeRespondents, qAnswers, survey.configuracoes?.cores_opcoes);
     });
 
     // 4. Gerar resumo executivo e conclusões estatísticas
@@ -160,7 +161,8 @@ export class AnalyticsEngine {
     question: Question,
     options: Option[],
     respondents: Respondent[],
-    answers: Answer[]
+    answers: Answer[],
+    coresEscolhidas?: Record<string, string>
   ): QuestionAnalytics {
     const totalRespondents = respondents.length;
     
@@ -203,7 +205,7 @@ export class AnalyticsEngine {
         count,
         percentage,
         rank: 0,
-        color: CHART_COLORS[colorIdx % CHART_COLORS.length]
+        color: corDaAlternativa(opt.texto, colorIdx, coresEscolhidas, CHART_COLORS)
       });
       colorIdx++;
     });
@@ -219,7 +221,7 @@ export class AnalyticsEngine {
           count,
           percentage,
           rank: 0,
-          color: CHART_COLORS[colorIdx % CHART_COLORS.length]
+          color: corDaAlternativa(text, colorIdx, coresEscolhidas, CHART_COLORS)
         });
         colorIdx++;
       }

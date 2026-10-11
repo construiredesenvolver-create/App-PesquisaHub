@@ -235,3 +235,48 @@ export function paletaNiveis(n: number): { fundo: string; texto: string }[] {
   if (n <= 1) return [base[4]];
   return Array.from({ length: n }, (_, i) => base[Math.round((i * (base.length - 1)) / (n - 1))]);
 }
+
+// ------------------------------------------------------------------------
+// CORES DAS ALTERNATIVAS NOS GRÁFICOS
+// ------------------------------------------------------------------------
+
+/** Cor sugerida pelo emoji colorido no texto da alternativa (ex.: "🔴 — Consciente"). */
+const CORES_EMOJI: Array<[string, string]> = [
+  ['🔴', '#dc2626'],
+  ['🟠', '#ea580c'],
+  ['🟡', '#eab308'],
+  ['🟢', '#16a34a'],
+  ['🔵', '#2563eb'],
+  ['🟣', '#9333ea'],
+  ['🟤', '#92400e'],
+  ['⚫', '#1f2937'],
+  ['⚪', '#94a3b8']
+];
+
+/** Paleta oferecida no seletor de cores. */
+export const PALETA_CORES = [
+  '#dc2626', '#ea580c', '#d97706', '#eab308', '#16a34a', '#059669',
+  '#0d9488', '#0891b2', '#2563eb', '#4f46e5', '#9333ea', '#db2777',
+  '#64748b', '#1f2937'
+];
+
+/**
+ * Cor de uma alternativa, nesta ordem de prioridade:
+ * 1) a cor escolhida pela pessoa (salva na pesquisa, vale para todas as perguntas com o mesmo texto);
+ * 2) o emoji colorido no começo do texto;
+ * 3) a paleta padrão, pela posição.
+ */
+export function corDaAlternativa(texto: string, posicao: number, coresEscolhidas: Record<string, string> | undefined, paletaPadrao: string[]): string {
+  const chave = normalizarNome(texto);
+  const escolhida = coresEscolhidas?.[chave];
+  if (escolhida) return escolhida;
+  const inicio = String(texto || '').trim().slice(0, 4);
+  const porEmoji = CORES_EMOJI.find(([emoji]) => inicio.includes(emoji));
+  if (porEmoji) return porEmoji[1];
+  return paletaPadrao[posicao % paletaPadrao.length];
+}
+
+/** Chave usada para guardar a cor escolhida de uma alternativa. */
+export function chaveCor(texto: string): string {
+  return normalizarNome(texto);
+}
