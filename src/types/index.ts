@@ -17,6 +17,7 @@ export interface SurveySettings {
   mensagem_conclusao?: string;
   categoria?: string;
   contexto_ia?: string;
+  publico_esperado?: string[]; // nomes de quem deve responder (aba Adesão)
 }
 
 export interface Survey {
