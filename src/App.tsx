@@ -1,17 +1,28 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { Sidebar, NavTab } from './components/Sidebar';
 import { Navbar } from './components/Navbar';
 import { GeneralDashboard } from './components/GeneralDashboard';
 import { SurveyList } from './components/SurveyList';
-import { SurveyBuilder } from './components/SurveyBuilder';
-import { AnalyticsView } from './components/analytics/AnalyticsView';
-import { SettingsView } from './components/SettingsView';
 import { PublicSurveyView } from './components/PublicSurveyView';
-import { ShareModal } from './components/ShareModal';
 import { LoginView } from './components/LoginView';
-import { UsersView } from './components/UsersView';
-import { DepartmentsView } from './components/DepartmentsView';
-import { AcessoEspecialModal } from './components/AcessoEspecialModal';
+
+// Telas carregadas sob demanda: deixam a abertura do app (e do formulário público)
+// bem mais leve, principalmente no celular. Cada uma só é baixada quando usada.
+const SurveyBuilder = lazy(() => import('./components/SurveyBuilder').then((m) => ({ default: m.SurveyBuilder })));
+const AnalyticsView = lazy(() => import('./components/analytics/AnalyticsView').then((m) => ({ default: m.AnalyticsView })));
+const SettingsView = lazy(() => import('./components/SettingsView').then((m) => ({ default: m.SettingsView })));
+const ShareModal = lazy(() => import('./components/ShareModal').then((m) => ({ default: m.ShareModal })));
+const UsersView = lazy(() => import('./components/UsersView').then((m) => ({ default: m.UsersView })));
+const DepartmentsView = lazy(() => import('./components/DepartmentsView').then((m) => ({ default: m.DepartmentsView })));
+const AcessoEspecialModal = lazy(() => import('./components/AcessoEspecialModal').then((m) => ({ default: m.AcessoEspecialModal })));
+const AuditoriaView = lazy(() => import('./components/AuditoriaView').then((m) => ({ default: m.AuditoriaView })));
+
+const CarregandoTela = () => (
+  <div className="p-8 flex flex-col items-center justify-center gap-3 text-center min-h-[40vh]">
+    <Loader2 className="w-7 h-7 text-blue-600 animate-spin" />
+    <p className="text-xs font-semibold text-slate-500">Carregando...</p>
+  </div>
+);
 import {
   podeCriarPesquisa,
   podeEditarPesquisa,
@@ -484,7 +495,7 @@ export function App() {
   // Usuários que já são "user" comum não devem ficar presos na tela de Usuários (só ADM)
   const podeCriar = podeCriarPesquisa(currentUser);
   const effectiveTab =
-    ((activeTab === 'users' || activeTab === 'departments') && currentUser.role !== 'admin') ||
+    ((activeTab === 'users' || activeTab === 'departments' || activeTab === 'audit') && currentUser.role !== 'admin') ||
     (activeTab === 'builder' && !editingSurvey && !podeCriar)
       ? 'dashboard'
       : activeTab;
@@ -568,6 +579,7 @@ export function App() {
 
         {/* View Switcher */}
         <main className="flex-1 pb-16">
+          <Suspense fallback={<CarregandoTela />}>
           {/* Filtro de departamentos (aparece quando há pesquisas de mais de um departamento) */}
           {(effectiveTab === 'dashboard' || effectiveTab === 'surveys') && departamentosEmUso.length > 1 && (
             <div className="px-4 md:px-8 pt-4 max-w-7xl mx-auto">
@@ -701,6 +713,10 @@ export function App() {
             <UsersView />
           )}
 
+          {effectiveTab === 'audit' && currentUser.role === 'admin' && (
+            <AuditoriaView surveys={surveys} />
+          )}
+
           {effectiveTab === 'departments' && currentUser.role === 'admin' && (
             <DepartmentsView
               surveys={surveys}
@@ -728,9 +744,11 @@ export function App() {
               }}
             />
           )}
+          </Suspense>
         </main>
       </div>
 
+      <Suspense fallback={null}>
       {/* Liberação de acesso especial a uma pesquisa */}
       {accessModalSurvey && (
         <AcessoEspecialModal survey={accessModalSurvey} onClose={() => setAccessModalSurvey(null)} />
@@ -745,6 +763,7 @@ export function App() {
           onOpenPublicView={handleOpenPublicView}
         />
       )}
+      </Suspense>
 
     </div>
   );
