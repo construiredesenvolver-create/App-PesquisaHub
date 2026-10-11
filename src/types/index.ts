@@ -21,6 +21,7 @@ export interface SurveySettings {
   uma_resposta_por_pessoa?: boolean; // bloqueia uma segunda resposta com o mesmo nome
   restringir_a_lista?: boolean; // só aceita nomes da lista de Adesão
   serie_id?: string; // liga reaplicações da mesma pesquisa (aba Evolução)
+  cores_opcoes?: Record<string, string>; // cor escolhida por alternativa (texto normalizado -> #hex)
 }
 
 export interface Survey {
