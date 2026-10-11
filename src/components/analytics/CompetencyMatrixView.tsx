@@ -11,35 +11,13 @@ import {
   Tooltip
 } from 'recharts';
 import { Question, Option, Respondent, Answer } from '../../types';
-import { EscalaDetectada, montarMatriz, rotuloCurtoNivel } from '../../services/analiseAvancada';
+import { EscalaDetectada, montarMatriz, rotuloCurtoNivel, paletaNiveis } from '../../services/analiseAvancada';
 
 interface CompetencyMatrixViewProps {
   escala: EscalaDetectada;
   options: Option[];
   respondents: Respondent[];
   answers: Answer[];
-}
-
-// Cores por nível (do menor para o maior). Para 4 níveis seguem as cores da Autoavaliação.
-function paletaNiveis(n: number): { fundo: string; texto: string }[] {
-  const quatro = [
-    { fundo: '#fecaca', texto: '#991b1b' },
-    { fundo: '#bfdbfe', texto: '#1e40af' },
-    { fundo: '#bbf7d0', texto: '#166534' },
-    { fundo: '#e9d5ff', texto: '#6b21a8' }
-  ];
-  if (n === 4) return quatro;
-  const base = [
-    { fundo: '#fecaca', texto: '#991b1b' },
-    { fundo: '#fed7aa', texto: '#9a3412' },
-    { fundo: '#fde68a', texto: '#854d0e' },
-    { fundo: '#bfdbfe', texto: '#1e40af' },
-    { fundo: '#bbf7d0', texto: '#166534' },
-    { fundo: '#a7f3d0', texto: '#065f46' },
-    { fundo: '#e9d5ff', texto: '#6b21a8' }
-  ];
-  if (n <= 1) return [base[4]];
-  return Array.from({ length: n }, (_, i) => base[Math.round((i * (base.length - 1)) / (n - 1))]);
 }
 
 const fmt = (v: number) => (v > 0 ? v.toFixed(1).replace('.', ',') : '—');

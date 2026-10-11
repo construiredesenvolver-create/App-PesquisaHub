@@ -17,13 +17,35 @@ import {
 import { SurveyAnalyticsData, Question } from '../../types';
 import { AnalyticsEngine, CHART_COLORS } from '../../services/analyticsEngine';
 import { QuestionChartType } from './QuestionAnalyticsCard';
+import { detectarEscala, montarMatriz, rotuloCurtoNivel, paletaNiveis } from '../../services/analiseAvancada';
 
-export type ReportMode = 'simples' | 'completo';
+export type ReportMode = 'simples' | 'completo' | 'personalizado';
+
+/** Seções que podem entrar no PDF (a capa sempre entra). */
+export interface SecoesRelatorio {
+  conclusoes: boolean;
+  evolucao: boolean;
+  resumo: boolean;
+  perguntas: boolean;
+  matriz: boolean;
+  cruzamento: boolean;
+  individuais: boolean;
+}
+
+export const SECOES_SIMPLES: SecoesRelatorio = {
+  conclusoes: true, evolucao: true, resumo: true, perguntas: false, matriz: false, cruzamento: false, individuais: false
+};
+export const SECOES_COMPLETO: SecoesRelatorio = {
+  conclusoes: true, evolucao: true, resumo: true, perguntas: true, matriz: true, cruzamento: true, individuais: true
+};
 
 interface PrintableReportProps {
   containerId: string;
   analyticsData: SurveyAnalyticsData;
-  mode: ReportMode;
+  secoes: SecoesRelatorio;
+  rotuloVersao: string;
+  // Perguntas que entram na "Análise por Pergunta" (vazio/ausente = todas)
+  perguntasSelecionadas?: string[];
   getChartTypeForQuestion: (questionId: string, recommendedChart: string) => QuestionChartType;
 }
 
@@ -41,10 +63,20 @@ const blockStyle: React.CSSProperties = {
 export const PrintableReport: React.FC<PrintableReportProps> = ({
   containerId,
   analyticsData,
-  mode,
+  secoes,
+  rotuloVersao,
+  perguntasSelecionadas,
   getChartTypeForQuestion
 }) => {
   const { survey, executiveSummary, questionAnalytics, questions, options, respondents, answers } = analyticsData;
+
+  const analisesPorPergunta = perguntasSelecionadas && perguntasSelecionadas.length > 0
+    ? questionAnalytics.filter((qa) => perguntasSelecionadas.includes(qa.questionId))
+    : questionAnalytics;
+
+  // Matriz de Competências (só existe quando há uma escala comum entre várias perguntas)
+  const escala = secoes.matriz ? detectarEscala(questions, options) : null;
+  const matriz = escala ? montarMatriz(escala, options, respondents, answers) : null;
 
   const choiceQuestions = questions.filter(
     (q) => q.tipo === 'single_choice' || q.tipo === 'multiple_choice'
@@ -53,7 +85,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
   const questionA: Question | undefined = choiceQuestions.length > 1 ? choiceQuestions[1] : choiceQuestions[0];
   const questionB: Question | undefined = choiceQuestions.length > 2 ? choiceQuestions[2] : choiceQuestions[1];
 
-  const crossTab = (mode === 'completo' && questionA && questionB && questionA.id !== questionB.id)
+  const crossTab = (secoes.cruzamento && questionA && questionB && questionA.id !== questionB.id)
     ? AnalyticsEngine.crossTabulate(
         questionA,
         questionB,
@@ -77,7 +109,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
   // Dividir respondentes em blocos menores para a seção "Respostas Individuais" (uma tabela por bloco)
   const RESPONDENTS_PER_BLOCK = 12;
   const respondentBlocks: typeof respondents[] = [];
-  if (mode === 'completo') {
+  if (secoes.individuais) {
     for (let i = 0; i < respondents.length; i += RESPONDENTS_PER_BLOCK) {
       respondentBlocks.push(respondents.slice(i, i + RESPONDENTS_PER_BLOCK));
     }
@@ -100,11 +132,12 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
           <KpiBox label="Total de Perguntas" value={`${executiveSummary.totalQuestions} questões`} />
         </div>
         <div style={{ marginTop: 16, fontSize: 10, fontWeight: 700, color: '#7c3aed', textTransform: 'uppercase' }}>
-          Versão {mode === 'completo' ? 'Completa' : 'Simplificada'}
+          Versão {rotuloVersao}
         </div>
       </div>
 
       {/* BLOCO 2 — Principais conclusões */}
+      {secoes.conclusoes && (
       <div className="pdf-block" style={blockStyle}>
         <SectionTitle>Principais Conclusões e Padrões Identificados</SectionTitle>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 12 }}>
@@ -148,8 +181,10 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
         </div>
       </div>
 
+      )}
+
       {/* BLOCO 3 — Evolução temporal (se houver dados suficientes) */}
-      {executiveSummary.responsesOverTime.length > 1 && (
+      {secoes.evolucao && executiveSummary.responsesOverTime.length > 1 && (
         <div className="pdf-block" style={blockStyle}>
           <SectionTitle>Evolução Temporal do Volume de Respostas</SectionTitle>
           <div style={{ height: 220, marginTop: 10 }}>
@@ -173,6 +208,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
       )}
 
       {/* BLOCO 4 — Tabela resumo por pergunta */}
+      {secoes.resumo && (
       <div className="pdf-block" style={blockStyle}>
         <SectionTitle>Tabela Analítica Resumo por Pergunta</SectionTitle>
         <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', marginTop: 10 }}>
@@ -201,11 +237,16 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
         </table>
       </div>
 
-      {/* A PARTIR DAQUI: conteúdo exclusivo da versão COMPLETA */}
-      {mode === 'completo' && (
+      )}
+
+      {/* Matriz de Competências — lacunas, pontos fortes e mapa de calor */}
+      {matriz && escala && <MatrizPdf matriz={matriz} />}
+
+      {/* Seções detalhadas (escolhidas no modal de exportação) */}
+      {(secoes.perguntas || secoes.cruzamento || secoes.individuais) && (
         <>
           {/* Análise por Pergunta — um bloco por pergunta, com o MESMO gráfico selecionado na tela */}
-          {questionAnalytics.map((qa, idx) => {
+          {secoes.perguntas && analisesPorPergunta.map((qa, idx) => {
             const chartType = getChartTypeForQuestion(qa.questionId, qa.recommendedChart);
             const chartData = qa.distribution.map((item, i) => ({
               name: item.optionText,
@@ -217,7 +258,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
             return (
               <div key={qa.questionId} className="pdf-block" style={blockStyle}>
                 <div style={{ fontSize: 10, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 4 }}>
-                  Análise por Pergunta • {idx + 1} de {questionAnalytics.length}
+                  Análise por Pergunta • {idx + 1} de {analisesPorPergunta.length}
                 </div>
                 <h3 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>{qa.questionTitle}</h3>
 
@@ -373,6 +414,177 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({
         </>
       )}
     </div>
+  );
+};
+
+// ------------------------------------------------------------------------
+// MATRIZ DE COMPETÊNCIAS NO PDF
+// ------------------------------------------------------------------------
+const PESSOAS_POR_BLOCO_MATRIZ = 22;
+
+const MatrizPdf: React.FC<{ matriz: ReturnType<typeof montarMatriz> }> = ({ matriz }) => {
+  const { escala } = matriz;
+  const N = escala.niveis.length;
+  const cores = paletaNiveis(N);
+  const rotulos = escala.niveis.map(rotuloCurtoNivel);
+  const fmt = (v: number) => (v > 0 ? v.toFixed(1).replace('.', ',') : '—');
+  const codigo = (idx: number) => `C${idx + 1}`;
+
+  const comMedia = escala.questoes
+    .map((q, idx) => ({ q, idx, media: matriz.mediaPorQuestao[q.id] || 0 }))
+    .filter((x) => x.media > 0);
+  const lacunas = [...comMedia].sort((a, b) => a.media - b.media).slice(0, 5);
+  const fortes = [...comMedia].sort((a, b) => b.media - a.media).slice(0, 5);
+
+  const pessoas = [...matriz.pessoas].sort(
+    (a, b) => (matriz.mediaPorPessoa[b.id] || 0) - (matriz.mediaPorPessoa[a.id] || 0)
+  );
+  const blocosPessoas: typeof pessoas[] = [];
+  for (let i = 0; i < pessoas.length; i += PESSOAS_POR_BLOCO_MATRIZ) {
+    blocosPessoas.push(pessoas.slice(i, i + PESSOAS_POR_BLOCO_MATRIZ));
+  }
+
+  // Largura das colunas para caber na página A4
+  const larguraNome = 150;
+  const larguraMedia = 38;
+  const larguraCelula = Math.max(14, Math.floor((PRINT_WIDTH_PX - 56 - larguraNome - larguraMedia) / escala.questoes.length));
+
+  const Legenda = () => (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+      {rotulos.map((r, i) => (
+        <span key={i} style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: cores[i].fundo, color: cores[i].texto }}>
+          {i + 1} — {r}
+        </span>
+      ))}
+    </div>
+  );
+
+  const ListaCapacidades: React.FC<{ itens: typeof lacunas; cor: string; mostrarQuemEnsina?: boolean }> = ({ itens, cor, mostrarQuemEnsina }) => (
+    <div>
+      {itens.map((l) => {
+        const dist = matriz.distribuicaoPorQuestao[l.q.id];
+        const total = dist.reduce((s, v) => s + v, 0) || 1;
+        const referencias = matriz.pessoas.filter((p) => matriz.nivel[p.id][l.q.id] === N);
+        return (
+          <div key={l.q.id} style={{ marginBottom: 9 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10 }}>
+              <span><strong>{codigo(l.idx)}</strong> · {l.q.titulo}</span>
+              <strong style={{ color: cor }}>{fmt(l.media)}</strong>
+            </div>
+            <div style={{ display: 'flex', height: 6, borderRadius: 4, overflow: 'hidden', background: '#f1f5f9', marginTop: 3 }}>
+              {dist.map((v, i) => (
+                <div key={i} style={{ width: `${(v / total) * 100}%`, background: cores[i].fundo }} />
+              ))}
+            </div>
+            {mostrarQuemEnsina && (
+              <div style={{ fontSize: 9, color: '#64748b', marginTop: 2 }}>
+                {referencias.length > 0
+                  ? <>Pode ensinar: <strong style={{ color: '#334155' }}>{referencias.map((p) => p.nome.split(' ')[0]).join(', ')}</strong></>
+                  : <>Ninguém se declarou {rotulos[N - 1]} — avaliar treinamento externo.</>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <>
+      <div className="pdf-block" style={blockStyle}>
+        <SectionTitle>Matriz de Competências</SectionTitle>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginTop: 12 }}>
+          <KpiBox label="Média da equipe" value={`${fmt(matriz.mediaGeral)} de ${N}`} />
+          <KpiBox label="Pessoas avaliadas" value={`${matriz.pessoas.length}`} />
+          <KpiBox label="Capacidades" value={`${escala.questoes.length}`} />
+        </div>
+        <Legenda />
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+          <div style={{ background: '#fff1f2', border: '1px solid #fecdd3', borderRadius: 14, padding: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#9f1239', textTransform: 'uppercase', marginBottom: 8 }}>
+              Maiores lacunas — prioridade de treinamento
+            </div>
+            <ListaCapacidades itens={lacunas} cor="#be123c" mostrarQuemEnsina />
+          </div>
+          <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 14, padding: 14 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#065f46', textTransform: 'uppercase', marginBottom: 8 }}>
+              Pontos fortes da equipe
+            </div>
+            <ListaCapacidades itens={fortes} cor="#047857" />
+          </div>
+        </div>
+      </div>
+
+      {blocosPessoas.map((grupo, bIdx) => (
+        <div key={bIdx} className="pdf-block" style={blockStyle}>
+          {bIdx === 0 && <SectionTitle>Mapa de Calor — Pessoas × Capacidades</SectionTitle>}
+          {bIdx === 0 && <Legenda />}
+          <table style={{ borderCollapse: 'collapse', marginTop: 10, fontSize: 9, tableLayout: 'fixed' }}>
+            <thead>
+              <tr>
+                <th style={{ width: larguraNome, textAlign: 'left', padding: '4px 6px', background: '#f1f5f9', color: '#475569' }}>Pessoa</th>
+                {escala.questoes.map((q, idx) => (
+                  <th key={q.id} style={{ width: larguraCelula, padding: '4px 0', background: '#f1f5f9', color: '#475569', fontSize: 8 }}>
+                    {codigo(idx)}
+                  </th>
+                ))}
+                <th style={{ width: larguraMedia, padding: '4px 2px', background: '#e2e8f0', color: '#334155' }}>Média</th>
+              </tr>
+            </thead>
+            <tbody>
+              {grupo.map((p) => (
+                <tr key={p.id}>
+                  <td style={{ padding: '3px 6px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', borderBottom: '1px solid #f1f5f9' }}>
+                    {p.nome.length > 26 ? p.nome.slice(0, 25) + '…' : p.nome}
+                  </td>
+                  {escala.questoes.map((q) => {
+                    const v = matriz.nivel[p.id][q.id] || 0;
+                    return (
+                      <td
+                        key={q.id}
+                        style={{
+                          textAlign: 'center',
+                          fontWeight: 800,
+                          border: '1px solid #ffffff',
+                          padding: '3px 0',
+                          background: v ? cores[v - 1].fundo : '#f8fafc',
+                          color: v ? cores[v - 1].texto : '#cbd5e1'
+                        }}
+                      >
+                        {v || '·'}
+                      </td>
+                    );
+                  })}
+                  <td style={{ textAlign: 'center', fontWeight: 800, background: '#f8fafc' }}>{fmt(matriz.mediaPorPessoa[p.id] || 0)}</td>
+                </tr>
+              ))}
+              {bIdx === blocosPessoas.length - 1 && (
+                <tr>
+                  <td style={{ padding: '4px 6px', fontWeight: 800, background: '#f1f5f9' }}>Média</td>
+                  {escala.questoes.map((q) => (
+                    <td key={q.id} style={{ textAlign: 'center', fontWeight: 800, background: '#f1f5f9', fontSize: 8, padding: '4px 0' }}>
+                      {fmt(matriz.mediaPorQuestao[q.id] || 0)}
+                    </td>
+                  ))}
+                  <td style={{ textAlign: 'center', fontWeight: 800, background: '#e2e8f0' }}>{fmt(matriz.mediaGeral)}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      ))}
+
+      <div className="pdf-block" style={blockStyle}>
+        <SectionTitle>Legenda das Capacidades</SectionTitle>
+        <div style={{ columnCount: 2, columnGap: 20, marginTop: 10 }}>
+          {escala.questoes.map((q, idx) => (
+            <p key={q.id} style={{ fontSize: 9, marginBottom: 4, breakInside: 'avoid' }}>
+              <strong>{codigo(idx)}</strong> · {q.titulo}
+            </p>
+          ))}
+        </div>
+      </div>
+    </>
   );
 };
 
