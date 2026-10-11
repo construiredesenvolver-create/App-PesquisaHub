@@ -5,6 +5,8 @@ import { GeneralDashboard } from './components/GeneralDashboard';
 import { SurveyList } from './components/SurveyList';
 import { PublicSurveyView } from './components/PublicSurveyView';
 import { LoginView } from './components/LoginView';
+import { PainelDepartamentos } from './components/PainelDepartamentos';
+import { ConteudoModelo } from './services/modelos';
 
 // Telas carregadas sob demanda: deixam a abertura do app (e do formulário público)
 // bem mais leve, principalmente no celular. Cada uma só é baixada quando usada.
@@ -15,6 +17,8 @@ const ShareModal = lazy(() => import('./components/ShareModal').then((m) => ({ d
 const UsersView = lazy(() => import('./components/UsersView').then((m) => ({ default: m.UsersView })));
 const DepartmentsView = lazy(() => import('./components/DepartmentsView').then((m) => ({ default: m.DepartmentsView })));
 const AcessoEspecialModal = lazy(() => import('./components/AcessoEspecialModal').then((m) => ({ default: m.AcessoEspecialModal })));
+const EscolherModeloModal = lazy(() => import('./components/ModelosModal').then((m) => ({ default: m.EscolherModeloModal })));
+const SalvarModeloModal = lazy(() => import('./components/ModelosModal').then((m) => ({ default: m.SalvarModeloModal })));
 const AuditoriaView = lazy(() => import('./components/AuditoriaView').then((m) => ({ default: m.AuditoriaView })));
 
 const CarregandoTela = () => (
@@ -85,6 +89,12 @@ export function App() {
   const [isLoadingPublicSurvey, setIsLoadingPublicSurvey] = useState(false);
   const [shareModalSurvey, setShareModalSurvey] = useState<Survey | null>(null);
   const [accessModalSurvey, setAccessModalSurvey] = useState<Survey | null>(null);
+
+  // Modelos de pesquisa: escolher ao criar / salvar uma pesquisa como modelo
+  const [mostrarModelos, setMostrarModelos] = useState(false);
+  const [modeloSelecionado, setModeloSelecionado] = useState<ConteudoModelo | null>(null);
+  const [versaoModelo, setVersaoModelo] = useState(0);
+  const [salvarModeloSurvey, setSalvarModeloSurvey] = useState<Survey | null>(null);
 
   // Departamentos (lista geral) e filtro de departamentos escolhido pela pessoa no painel
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -244,10 +254,30 @@ export function App() {
     fetchSurveyDetailFor(surveyId);
   };
 
+  // "Nova pesquisa" abre primeiro a escolha de modelo (ou em branco)
   const handleOpenNewSurvey = () => {
+    setMostrarModelos(true);
+  };
+
+  const handleEscolherModelo = (conteudo: ConteudoModelo | null) => {
+    setMostrarModelos(false);
+    setModeloSelecionado(conteudo);
+    setVersaoModelo((v) => v + 1);
     setEditingSurvey(null);
     setActiveTab('builder');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Reaplicar: nova aplicação (Rascunho) ligada à original, para comparar a evolução
+  const handleReapplySurvey = async (survey: Survey) => {
+    try {
+      await ApiService.fetchSurveyDetail(survey.id);
+      const nova = await ApiService.reapplySurvey(survey.id);
+      await refreshDataFromSheets();
+      if (nova) showToast(`Nova aplicação criada como Rascunho: "${nova.titulo}". Revise e publique quando quiser.`);
+    } catch (err: any) {
+      showToast(`Erro ao reaplicar: ${err.message || err}`);
+    }
   };
 
   const handleEditSurvey = (survey: Survey) => {
@@ -613,6 +643,15 @@ export function App() {
             </div>
           )}
 
+          {effectiveTab === 'dashboard' && currentUser.role !== 'especial' && (
+            <PainelDepartamentos
+              surveys={surveysVisiveis}
+              respondents={respondentsVisiveis}
+              departments={departments}
+              onAbrirPesquisa={handleAnalyzeSurvey}
+            />
+          )}
+
           {effectiveTab === 'dashboard' && (
             <GeneralDashboard
               surveys={surveysVisiveis}
@@ -636,6 +675,8 @@ export function App() {
               respondents={respondentsVisiveis}
               permissoes={permissoesLista}
               onManageAccess={(s) => setAccessModalSurvey(s)}
+              onSaveAsTemplate={(s) => setSalvarModeloSurvey(s)}
+              onReapply={handleReapplySurvey}
               mostrarDepartamento={departamentosEmUso.length > 1 || currentUser.role === 'admin'}
               isLoading={isRefreshing}
               apiError={apiError}
@@ -665,7 +706,8 @@ export function App() {
                 isSaving={isSavingSurvey}
                 onSaveSurvey={handleSaveSurvey}
                 departamentosDisponiveis={departamentosParaCriar(currentUser, departments)}
-                key={editingSurvey ? `editar-${editingSurvey.id}` : 'nova'}
+                key={editingSurvey ? `editar-${editingSurvey.id}` : `nova-${versaoModelo}`}
+                modelo={editingSurvey ? null : modeloSelecionado}
                 onCancel={() => setActiveTab(surveys.length > 0 ? 'surveys' : 'dashboard')}
               />
             )
@@ -749,6 +791,24 @@ export function App() {
       </div>
 
       <Suspense fallback={null}>
+      {/* Escolha de modelo ao criar uma nova pesquisa */}
+      {mostrarModelos && (
+        <EscolherModeloModal onClose={() => setMostrarModelos(false)} onEscolher={handleEscolherModelo} />
+      )}
+
+      {/* Salvar uma pesquisa como modelo */}
+      {salvarModeloSurvey && (
+        <SalvarModeloModal
+          survey={salvarModeloSurvey}
+          departamentos={departamentosParaCriar(currentUser, departments)}
+          onClose={() => setSalvarModeloSurvey(null)}
+          onSalvo={() => {
+            setSalvarModeloSurvey(null);
+            showToast('Modelo salvo! Ele aparece ao clicar em "Nova Pesquisa".');
+          }}
+        />
+      )}
+
       {/* Liberação de acesso especial a uma pesquisa */}
       {accessModalSurvey && (
         <AcessoEspecialModal survey={accessModalSurvey} onClose={() => setAccessModalSurvey(null)} />
