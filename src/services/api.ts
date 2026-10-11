@@ -840,14 +840,16 @@ export class ApiService {
     surveyId: string,
     respondentName: string,
     answersMap: Record<string, string | string[]>,
-    identificador?: string
+    identificador?: string,
+    extra?: { hp?: string }
   ): Promise<{ success: boolean; message: string }> {
     try {
       const { data, error } = await supabase.rpc('submit_response', {
         p_survey_id: surveyId,
         p_nome: respondentName.trim(),
         p_identificador: identificador?.trim() || '',
-        p_respostas: answersMap
+        p_respostas: answersMap,
+        p_extra: { hp: extra?.hp || '' }
       });
       if (error) throw error;
       return {
